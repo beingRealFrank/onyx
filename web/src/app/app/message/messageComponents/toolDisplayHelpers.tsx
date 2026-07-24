@@ -23,6 +23,7 @@ import {
   SvgXCircle,
   SvgCode,
   SvgWrench,
+  SvgServer,
 } from "@opal/icons";
 
 /**
@@ -112,6 +113,8 @@ export function getToolName(packets: Packet[], t: TimelineTranslate): string {
     case PacketType.MEMORY_TOOL_START:
     case PacketType.MEMORY_TOOL_NO_ACCESS:
       return t("toolNames.memory");
+    case PacketType.POSTGRES_TOOL_START:
+      return t("toolNames.knowledgeBaseQuery");
     default:
       return t("toolNames.tool");
   }
@@ -147,6 +150,8 @@ export function getToolIcon(packets: Packet[]): IconFunctionComponent {
     case PacketType.MEMORY_TOOL_START:
     case PacketType.MEMORY_TOOL_NO_ACCESS:
       return SvgBookOpen;
+    case PacketType.POSTGRES_TOOL_START:
+      return SvgServer;
     default:
       return SvgCircle;
   }
