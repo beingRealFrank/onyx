@@ -1208,3 +1208,87 @@ func TestRestoreCountsParentDirectories(t *testing.T) {
 		t.Fatalf("file as a parent: %v", err)
 	}
 }
+
+func TestStat(t *testing.T) {
+	dir := t.TempDir()
+	dir, err := filepath.EvalSymlinks(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	managed := filepath.Join(dir, "managed")
+	put(t, managed, "lib.txt", "lib")
+	outsideFile := filepath.Join(dir, "elsewhere.txt")
+	if err := os.WriteFile(outsideFile, []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	s, base := newStore(t, Config{ReadLinkRoots: []string{managed}})
+	put(t, base, "a.txt", "a")
+	if err := os.Chmod(filepath.Join(base, "a.txt"), 0o750); err != nil {
+		t.Fatal(err)
+	}
+	put(t, base, "dir/b.txt", "b")
+	put(t, base, "new\nline", "n")
+	links := map[string]string{
+		"l2":       "a.txt",
+		"l1":       "l2",
+		"dirlink":  "dir",
+		"broken":   "gone",
+		"loop":     "loop",
+		"absin":    filepath.Join(base, "dir"),
+		"absout":   outsideFile,
+		"library":  managed,
+		"escape":   "../" + sid + "/a.txt",
+		"dir/back": "../a.txt",
+	}
+	for name, target := range links {
+		if err := os.Symlink(target, filepath.Join(base, name)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	paths := []string{
+		"a.txt", "missing", "nodir/x", "a.txt/x", "l1", "dirlink/b.txt", "dirlink/new",
+		"broken", "loop", "loop/x", "absin/b.txt", "absout", "library/lib.txt", "escape",
+		"dir/back", "", "/dir/", "new\nline",
+	}
+	stats, err := s.Stat(sid, paths)
+	if err != nil {
+		t.Fatal(err)
+	}
+	in := func(p string) Resolved { return Resolved{Path: p} }
+	out := func(p string) Resolved { return Resolved{Path: p, Outside: true} }
+	want := []PathStat{
+		{Path: "a.txt", Exists: true, Type: TypeRegular, Mode: 0o750, Real: in("a.txt"), Entry: in("a.txt")},
+		{Path: "missing", Real: in("missing"), Entry: in("missing")},
+		{Path: "nodir/x", Real: in("nodir/x"), Entry: in("nodir/x")},
+		{Path: "a.txt/x", Real: in("a.txt/x"), Entry: in("a.txt/x")},
+		{Path: "l1", Exists: true, IsSymlink: true, Type: TypeRegular, Mode: 0o750, Real: in("a.txt"), Entry: in("l1")},
+		{Path: "dirlink/b.txt", Exists: true, Type: TypeRegular, Mode: 0o644, Real: in("dir/b.txt"), Entry: in("dir/b.txt")},
+		{Path: "dirlink/new", Real: in("dir/new"), Entry: in("dir/new")},
+		{Path: "broken", Exists: true, IsSymlink: true, Real: in("gone"), Entry: in("broken")},
+		{Path: "loop", Err: "too many levels of symbolic links"},
+		{Path: "loop/x", Err: "too many levels of symbolic links"},
+		{Path: "absin/b.txt", Exists: true, Type: TypeRegular, Mode: 0o644, Real: in("dir/b.txt"), Entry: in("dir/b.txt")},
+		{Path: "absout", Exists: true, IsSymlink: true, Real: out(outsideFile), Entry: in("absout")},
+		{Path: "library/lib.txt", Real: out(filepath.Join(managed, "lib.txt")), Entry: out(filepath.Join(managed, "lib.txt"))},
+		{Path: "escape", Exists: true, IsSymlink: true, Real: out(filepath.Join(filepath.Dir(base), sid, "a.txt")), Entry: in("escape")},
+		{Path: "dir/back", Exists: true, IsSymlink: true, Type: TypeRegular, Mode: 0o750, Real: in("a.txt"), Entry: in("dir/back")},
+		{Path: ".", Exists: true, Type: TypeDirectory, Mode: 0o755, Real: in("."), Entry: in(".")},
+		{Path: "dir", Exists: true, Type: TypeDirectory, Mode: 0o755, Real: in("dir"), Entry: in("dir")},
+		{Path: "new\nline", Exists: true, Type: TypeRegular, Mode: 0o644, Real: in("new\nline"), Entry: in("new\nline")},
+	}
+	for i := range want {
+		if stats[i] != want[i] {
+			t.Errorf("%q:\n got %+v\nwant %+v", paths[i], stats[i], want[i])
+		}
+	}
+
+	if _, err := s.Stat("", []string{"a.txt"}); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("no session: %v", err)
+	}
+	if _, err := s.Stat(sid, make([]string, MaxStatPaths+1)); !errors.Is(err, ErrLimit) {
+		t.Fatalf("too many paths: %v", err)
+	}
+	if _, err := s.Stat(sid, []string{"../x"}); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("dot-dot: %v", err)
+	}
+}

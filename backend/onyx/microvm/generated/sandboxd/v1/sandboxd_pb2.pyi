@@ -1,5 +1,5 @@
-# Generated from microvm/proto/sandboxd/v1/sandboxd.proto (blob 2bf940d43331a7218ce543f9286bd3112cf16bf4)
-# at commit 379a92a6cb by backend/onyx/microvm/generated/regenerate.sh. Do not edit.
+# Generated from microvm/proto/sandboxd/v1/sandboxd.proto (blob 6d10782937c89c6093d5d6eb890bcfb3b869783c)
+# at commit 7b542d9f4a by backend/onyx/microvm/generated/regenerate.sh. Do not edit.
 import datetime
 
 from google.protobuf import duration_pb2 as _duration_pb2
@@ -573,6 +573,48 @@ class DeleteFileResponse(_message.Message):
     DELETED_FIELD_NUMBER: _ClassVar[int]
     deleted: bool
     def __init__(self, deleted: bool = ...) -> None: ...
+
+class StatFilesRequest(_message.Message):
+    __slots__ = ("session_id", "paths")
+    SESSION_ID_FIELD_NUMBER: _ClassVar[int]
+    PATHS_FIELD_NUMBER: _ClassVar[int]
+    session_id: str
+    paths: _containers.RepeatedScalarFieldContainer[str]
+    def __init__(self, session_id: _Optional[str] = ..., paths: _Optional[_Iterable[str]] = ...) -> None: ...
+
+class ResolvedPath(_message.Message):
+    __slots__ = ("path", "outside")
+    PATH_FIELD_NUMBER: _ClassVar[int]
+    OUTSIDE_FIELD_NUMBER: _ClassVar[int]
+    path: str
+    outside: bool
+    def __init__(self, path: _Optional[str] = ..., outside: bool = ...) -> None: ...
+
+class PathStat(_message.Message):
+    __slots__ = ("path", "exists", "type", "mode", "is_symlink", "real_path", "entry_path", "error")
+    PATH_FIELD_NUMBER: _ClassVar[int]
+    EXISTS_FIELD_NUMBER: _ClassVar[int]
+    TYPE_FIELD_NUMBER: _ClassVar[int]
+    MODE_FIELD_NUMBER: _ClassVar[int]
+    IS_SYMLINK_FIELD_NUMBER: _ClassVar[int]
+    REAL_PATH_FIELD_NUMBER: _ClassVar[int]
+    ENTRY_PATH_FIELD_NUMBER: _ClassVar[int]
+    ERROR_FIELD_NUMBER: _ClassVar[int]
+    path: str
+    exists: bool
+    type: FileType
+    mode: int
+    is_symlink: bool
+    real_path: ResolvedPath
+    entry_path: ResolvedPath
+    error: str
+    def __init__(self, path: _Optional[str] = ..., exists: bool = ..., type: _Optional[_Union[FileType, str]] = ..., mode: _Optional[int] = ..., is_symlink: bool = ..., real_path: _Optional[_Union[ResolvedPath, _Mapping]] = ..., entry_path: _Optional[_Union[ResolvedPath, _Mapping]] = ..., error: _Optional[str] = ...) -> None: ...
+
+class StatFilesResponse(_message.Message):
+    __slots__ = ("stats",)
+    STATS_FIELD_NUMBER: _ClassVar[int]
+    stats: _containers.RepeatedCompositeFieldContainer[PathStat]
+    def __init__(self, stats: _Optional[_Iterable[_Union[PathStat, _Mapping]]] = ...) -> None: ...
 
 class ZipFilesRequest(_message.Message):
     __slots__ = ("session_id", "path", "exclude_names", "skip_hidden")

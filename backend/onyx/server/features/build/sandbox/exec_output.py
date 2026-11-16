@@ -27,10 +27,17 @@ def _utf8_prefix(text: str, max_bytes: int) -> str:
 class ExecOutputBuffer:
     """Collects one call's output. Each stream is decoded on its own (a
     character never mixes bytes of stdout and stderr). Keeps the first and
-    last half of `max_bytes` (UTF-8); `add` returns the text to stream now
-    (the head only)."""
+    last half of `max_bytes` (UTF-8); `add` returns the text to stream now:
+    the head, up to `preview_bytes` in all. The final output replaces that
+    preview, so it needs no more than the final output can show."""
 
-    def __init__(self, max_bytes: int = EXEC_CALL_OUTPUT_MAX_BYTES) -> None:
+    def __init__(
+        self,
+        max_bytes: int = EXEC_CALL_OUTPUT_MAX_BYTES,
+        preview_bytes: int = EXEC_CALL_OUTPUT_MAX_BYTES,
+    ) -> None:
+        self._preview_budget = preview_bytes
+        self._previewed = 0
         self._head_budget = max_bytes // 2
         self._tail_budget = max_bytes - self._head_budget
         self._head: list[str] = []
@@ -75,7 +82,12 @@ class ExecOutputBuffer:
             self._tail.append(rest)
             self._tail_bytes += _utf8_len(rest)
             self._trim_tail()
-        return head_part
+        preview = _utf8_prefix(head_part, self._preview_budget - self._previewed)
+        self._previewed += _utf8_len(preview)
+        if len(preview) < len(head_part):
+            # Closed: a later, smaller piece must not skip the cut text.
+            self._previewed = self._preview_budget
+        return preview
 
     def _trim_tail(self) -> None:
         while self._tail_bytes > self._tail_budget:

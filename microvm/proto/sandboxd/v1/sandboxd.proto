@@ -119,6 +119,15 @@ service Sandboxd {
   // with recursive. A missing path is not an error (deleted is false).
   rpc DeleteFile(DeleteFileRequest) returns (DeleteFileResponse);
 
+  // StatFiles reports what the kernel knows about many session paths in one
+  // call, so a caller can check every file of a change before it writes
+  // one. It needs a session_id and takes at most 1,000 paths. It reads no
+  // file content. A missing path is not an error: its stat says so. A path
+  // whose resolution leaves the session directory, also into a read-only
+  // root (--read-link-roots), is reported as outside and is not examined
+  // further, even if a later link leads back.
+  rpc StatFiles(StatFilesRequest) returns (StatFilesResponse);
+
   // ZipFiles streams a deflate zip of the regular files under a directory.
   // The last message is the summary. A limit error ends the stream with a
   // status; drop the bytes received so far.
@@ -634,6 +643,51 @@ message DeleteFileRequest {
 message DeleteFileResponse {
   // False if the path did not exist.
   bool deleted = 1;
+}
+
+message StatFilesRequest {
+  string session_id = 1;
+  // Session-relative paths, as for ReadFile. "" or "." is the session
+  // directory. At most 1,000.
+  repeated string paths = 2;
+}
+
+// A path as the kernel resolves it. A resolved path is session-relative
+// ("." for the session directory) when it is inside the session directory;
+// otherwise it is absolute and its outside flag is set.
+message ResolvedPath {
+  string path = 1;
+  bool outside = 2;
+}
+
+message PathStat {
+  // The requested path, cleaned as for ReadFile.
+  string path = 1;
+  // The path itself exists: a file, a directory or a link, even a broken
+  // one. Always false for an entry outside the session directory.
+  bool exists = 2;
+  // The type after following links. FILE_TYPE_UNSPECIFIED when the path or
+  // its link target is missing, when it loops, or when it is outside.
+  FileType type = 3;
+  // Permission bits (mode & 0777) of the file after following links. 0 when
+  // type is FILE_TYPE_UNSPECIFIED.
+  uint32 mode = 4;
+  // The path itself is a symlink.
+  bool is_symlink = 5;
+  // Every link followed, also in the last name; missing names stay as
+  // written.
+  ResolvedPath real_path = 6;
+  // The links of the parents followed, the last name kept: the entry that a
+  // delete removes. Unset with error.
+  ResolvedPath entry_path = 7;
+  // Set when the path cannot be resolved, such as a link loop ("too many
+  // levels of symbolic links"). Then only path and error are set.
+  string error = 8;
+}
+
+message StatFilesResponse {
+  // One per requested path, in request order.
+  repeated PathStat stats = 1;
 }
 
 message ZipFilesRequest {

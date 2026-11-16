@@ -196,6 +196,26 @@ func (s *Server) ListFiles(ctx context.Context, r *pb.ListFilesRequest) (*pb.Lis
 	return out, nil
 }
 
+// StatFiles implements pb.SandboxdServer.
+func (s *Server) StatFiles(_ context.Context, r *pb.StatFilesRequest) (*pb.StatFilesResponse, error) {
+	stats, err := s.files.Stat(r.GetSessionId(), r.GetPaths())
+	if err != nil {
+		return nil, fileError(err)
+	}
+	out := &pb.StatFilesResponse{Stats: make([]*pb.PathStat, len(stats))}
+	for i, st := range stats {
+		out.Stats[i] = &pb.PathStat{
+			Path: st.Path, Exists: st.Exists, Type: fileTypes[st.Type], Mode: st.Mode,
+			IsSymlink: st.IsSymlink, Error: st.Err,
+		}
+		if st.Err == "" {
+			out.Stats[i].RealPath = &pb.ResolvedPath{Path: st.Real.Path, Outside: st.Real.Outside}
+			out.Stats[i].EntryPath = &pb.ResolvedPath{Path: st.Entry.Path, Outside: st.Entry.Outside}
+		}
+	}
+	return out, nil
+}
+
 // DeleteFile implements pb.SandboxdServer.
 func (s *Server) DeleteFile(_ context.Context, r *pb.DeleteFileRequest) (*pb.DeleteFileResponse, error) {
 	deleted, err := s.files.Delete(r.GetSessionId(), r.GetPath(), r.GetRecursive())

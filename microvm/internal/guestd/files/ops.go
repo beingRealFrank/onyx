@@ -10,6 +10,7 @@ import (
 	"io/fs"
 	"os"
 	"path"
+	"path/filepath"
 	"regexp"
 	"slices"
 	"strings"
@@ -610,4 +611,204 @@ func (s *Store) openDelete(sessionID, p string) (*os.Root, string, error) {
 	}
 	root, err := s.openSession(sessionID, false)
 	return root, rel, err
+}
+
+// MaxStatPaths caps the paths of one Stat call.
+const MaxStatPaths = 1000
+
+// maxLinkHops is the kernel's limit (MAXSYMLINKS).
+const maxLinkHops = 40
+
+// Resolved is a path as the kernel resolves it: session-relative ("." for
+// the session directory) when inside the session directory, else absolute
+// with Outside set.
+type Resolved struct {
+	Path    string
+	Outside bool
+}
+
+// PathStat is what Stat reports for one path.
+type PathStat struct {
+	Path string
+	// Exists: the entry itself exists, also a broken link.
+	Exists bool
+	// Type after following links; TypeUnknown when missing, looping or
+	// outside the session directory.
+	Type Type
+	// Mode is the permission bits of the followed file.
+	Mode      uint32
+	IsSymlink bool
+	Real      Resolved
+	// Entry: the parents' links followed, the last name kept.
+	Entry Resolved
+	// Err is set when the path cannot be resolved (a link loop).
+	Err string
+}
+
+var errLinkLoop = errors.New("too many levels of symbolic links")
+
+// Stat reports the kernel's facts of session paths. It reads no content,
+// and it never examines a path outside the session directory: a resolution
+// that leaves it reports the path as outside.
+func (s *Store) Stat(sessionID string, paths []string) ([]PathStat, error) {
+	if sessionID == "" {
+		return nil, fmt.Errorf("%w: StatFiles needs a session_id", ErrInvalid)
+	}
+	if len(paths) > MaxStatPaths {
+		return nil, fmt.Errorf("%w: %d paths; at most %d per call", ErrLimit, len(paths), MaxStatPaths)
+	}
+	rels := make([]string, len(paths))
+	for i, p := range paths {
+		rel, err := cleanPath(p)
+		if err != nil {
+			return nil, err
+		}
+		rels[i] = rel
+	}
+	sr, err := s.openSession(sessionID, false)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = sr.Close() }()
+	spelled := filepath.Join(s.cfg.SessionsRoot, sessionID)
+	top, err := filepath.EvalSymlinks(spelled)
+	if err != nil {
+		return nil, fsErr(err)
+	}
+	r := sessionResolver{root: sr, tops: []string{top, spelled}}
+	out := make([]PathStat, len(rels))
+	for i, rel := range rels {
+		out[i], err = r.stat(rel)
+		if err != nil {
+			return nil, err
+		}
+	}
+	return out, nil
+}
+
+// sessionResolver follows links inside one session directory. tops are the
+// real and the spelled absolute paths of that directory.
+type sessionResolver struct {
+	root *os.Root
+	tops []string
+}
+
+func (r sessionResolver) stat(rel string) (PathStat, error) {
+	st := PathStat{Path: rel}
+	real, err := r.resolve(rel)
+	if errors.Is(err, errLinkLoop) {
+		st.Err = err.Error()
+		return st, nil
+	}
+	if err != nil {
+		return PathStat{}, err
+	}
+	entry := Resolved{Path: "."}
+	if rel != "." {
+		parent, err := r.resolve(parentOf(rel))
+		if errors.Is(err, errLinkLoop) {
+			st.Err = err.Error()
+			return st, nil
+		}
+		if err != nil {
+			return PathStat{}, err
+		}
+		entry = Resolved{Path: path.Join(parent.Path, path.Base(rel)), Outside: parent.Outside}
+	}
+	st.Real, st.Entry = real, entry
+	if !entry.Outside {
+		if fi, err := r.root.Lstat(entry.Path); err == nil {
+			st.Exists = true
+			st.IsSymlink = fi.Mode()&fs.ModeSymlink != 0
+		} else if !missing(err) {
+			return PathStat{}, fsErr(err)
+		}
+	}
+	if !real.Outside {
+		if fi, err := r.root.Lstat(real.Path); err == nil {
+			st.Type = typeOf(fi.Mode())
+			st.Mode = uint32(fi.Mode().Perm())
+		} else if !missing(err) {
+			return PathStat{}, fsErr(err)
+		}
+	}
+	return st, nil
+}
+
+// missing: the path, or a parent of it, does not exist or is not a
+// directory.
+func missing(err error) bool {
+	return errors.Is(err, fs.ErrNotExist) || errors.Is(err, syscall.ENOTDIR)
+}
+
+// resolve follows every link of a session-relative path, as realpath -m
+// does: missing names stay as written, ".." of a link target goes up from
+// the resolved directory. A resolution that leaves the session directory
+// stops there and returns the absolute rest of the path, outside.
+func (r sessionResolver) resolve(rel string) (Resolved, error) {
+	var done []string
+	rest := strings.Split(rel, "/")
+	hops := 0
+	for len(rest) > 0 {
+		name := rest[0]
+		rest = rest[1:]
+		switch name {
+		case "", ".":
+			continue
+		case "..":
+			if len(done) == 0 {
+				return Resolved{Path: path.Join(append([]string{path.Dir(r.tops[0])}, rest...)...), Outside: true}, nil
+			}
+			done = done[:len(done)-1]
+			continue
+		}
+		next := path.Join(append(slices.Clone(done), name)...)
+		fi, err := r.root.Lstat(next)
+		if err != nil {
+			if !missing(err) {
+				return Resolved{}, fsErr(err)
+			}
+			done = append(done, name)
+			continue
+		}
+		if fi.Mode()&fs.ModeSymlink == 0 {
+			done = append(done, name)
+			continue
+		}
+		hops++
+		if hops > maxLinkHops {
+			return Resolved{}, errLinkLoop
+		}
+		target, err := r.root.Readlink(next)
+		if err != nil {
+			return Resolved{}, fsErr(err)
+		}
+		if strings.HasPrefix(target, "/") {
+			below, inside := r.below(path.Clean(target))
+			if !inside {
+				return Resolved{Path: path.Join(append([]string{path.Clean(target)}, rest...)...), Outside: true}, nil
+			}
+			done = nil
+			target = below
+		}
+		rest = append(strings.Split(target, "/"), rest...)
+	}
+	if len(done) == 0 {
+		return Resolved{Path: "."}, nil
+	}
+	return Resolved{Path: strings.Join(done, "/")}, nil
+}
+
+// below returns the session-relative part of an absolute path inside the
+// session directory.
+func (r sessionResolver) below(abs string) (string, bool) {
+	for _, top := range r.tops {
+		if abs == top {
+			return ".", true
+		}
+		if strings.HasPrefix(abs, top+"/") {
+			return strings.TrimPrefix(abs, top+"/"), true
+		}
+	}
+	return "", false
 }

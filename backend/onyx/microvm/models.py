@@ -191,7 +191,8 @@ class VmRequest(BaseModel):
 
     tenant_id: str
     sandbox_id: UUID
-    # The sandbox's provisioning attempt number (the existing attempt fence).
+    # The lowest attempt that may serve the request: a running VM of an older
+    # attempt is a conflict, and a new VM starts at this attempt or later.
     attempt: int
     # Template version; vcpus and mem_mib come from the node's template.
     template: str
@@ -443,6 +444,37 @@ class FileType(str, Enum):
     SYMLINK = "SYMLINK"
     # A device, FIFO or socket.
     OTHER = "OTHER"
+
+
+class ResolvedPath(BaseModel):
+    """A path as the guest kernel resolves it: session-relative ("." for the
+    session directory) when inside the session directory, else absolute."""
+
+    model_config = ConfigDict(frozen=True)
+
+    path: str
+    outside: bool
+
+
+class PathStat(BaseModel):
+    """StatFiles' facts of one session path."""
+
+    model_config = ConfigDict(frozen=True)
+
+    path: str
+    # The entry itself exists, a broken link included.
+    exists: bool
+    # After following links; UNSPECIFIED when missing, looping or outside.
+    type: FileType
+    # mode & 0o777 of the followed file; 0 with UNSPECIFIED.
+    mode: int
+    is_symlink: bool
+    # None with error.
+    real_path: ResolvedPath | None
+    # The parents' links followed, the last name kept. None with error.
+    entry_path: ResolvedPath | None
+    # Set when the path cannot be resolved, such as a link loop.
+    error: str
 
 
 class FileEntry(BaseModel):

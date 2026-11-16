@@ -14,7 +14,8 @@ running, the daemon is unreachable) is a `HostAgentError`.
 import hashlib
 import secrets
 import threading
-from collections.abc import Generator, Iterator
+from collections.abc import Callable, Generator, Iterator
+from contextlib import AbstractContextManager, nullcontext
 from datetime import datetime, timezone
 from enum import Enum
 from typing import Protocol, TypeVar
@@ -48,6 +49,8 @@ from onyx.microvm.models import (
     FileListing,
     FileType,
     OutputStream,
+    PathStat,
+    ResolvedPath,
     WrittenFile,
     ZipSummary,
 )
@@ -70,6 +73,8 @@ _WINDOW_MARGIN_SECONDS = 5.0
 _TRANSFER_TIMEOUT_SECONDS = max(SANDBOX_FC_AGENT_RPC_TIMEOUT_SECONDS, 600.0)
 # WriteFile/UploadFile data messages (the daemon accepts up to 4 MiB).
 _WRITE_CHUNK_BYTES = 1 << 20
+# The guest daemon's cap on the paths of one StatFiles call.
+STAT_FILES_MAX_PATHS = 1000
 
 
 class SandboxDaemonErrorReason(str, Enum):
@@ -418,12 +423,16 @@ class SandboxDaemonClient:
         stdout_offset: int = 0,
         stderr_offset: int = 0,
         window_seconds: float | None = None,
+        on_cancel: Callable[[Callable[[], None]], AbstractContextManager[None]]
+        | None = None,
     ) -> Generator[ExecEvent, None, None]:
         """Stream an execution's output from the offsets, then its result.
         Works while it runs and after it ended. A gap event marks bytes the
         daemon no longer keeps. The call starts when the iterator is first
         read. With `window_seconds`, the stream ends without a result when
-        the window passes; the command keeps running."""
+        the window passes; the command keeps running. `on_cancel` (for
+        example `CancellationSignal.on_cancel`) registers a callback that
+        ends the window early."""
         if window_seconds is None:
             timeout = _DEFAULT_EXEC_DEADLINE_SECONDS + _STREAM_MARGIN_SECONDS
         else:
@@ -450,7 +459,8 @@ class SandboxDaemonClient:
         timer.daemon = True
         timer.start()
         try:
-            yield from self._exec_events(call)
+            with on_cancel(end_window) if on_cancel is not None else nullcontext():
+                yield from self._exec_events(call)
         except HostAgentError as e:
             ended = (
                 window_ended.is_set() and e.code is grpc.StatusCode.CANCELLED
@@ -674,6 +684,39 @@ class SandboxDaemonClient:
         except grpc.RpcError as e:
             raise sandbox_daemon_error(e) from e
         return r.deleted
+
+    def stat_files(self, *, session_id: str, paths: list[str]) -> list[PathStat]:
+        """The kernel's facts of at most STAT_FILES_MAX_PATHS session paths,
+        in request order. Reads no content."""
+        try:
+            r: sandboxd_pb2.StatFilesResponse = self._stub.StatFiles(
+                sandboxd_pb2.StatFilesRequest(session_id=session_id, paths=paths),
+                metadata=self._authed(),
+                timeout=SANDBOX_FC_AGENT_RPC_TIMEOUT_SECONDS,
+            )
+        except grpc.RpcError as e:
+            raise sandbox_daemon_error(e) from e
+        return [
+            PathStat(
+                path=stat.path,
+                exists=stat.exists,
+                type=_FILE_TYPES.get(stat.type, FileType.UNSPECIFIED),
+                mode=stat.mode,
+                is_symlink=stat.is_symlink,
+                real_path=ResolvedPath(
+                    path=stat.real_path.path, outside=stat.real_path.outside
+                )
+                if stat.HasField("real_path")
+                else None,
+                entry_path=ResolvedPath(
+                    path=stat.entry_path.path, outside=stat.entry_path.outside
+                )
+                if stat.HasField("entry_path")
+                else None,
+                error=stat.error,
+            )
+            for stat in r.stats
+        ]
 
     def zip_files(
         self,

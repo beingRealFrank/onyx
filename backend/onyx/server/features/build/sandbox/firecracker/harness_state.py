@@ -295,6 +295,15 @@ def is_purged(cache: CacheBackend, sandbox_id: UUID, session_id: UUID) -> bool:
     )
 
 
+def is_deleted(cache: CacheBackend, sandbox_id: UUID, session_id: UUID) -> bool:
+    """A delete purged the session or its sandbox. A retention purge does not
+    count: its session can be opened again."""
+    if cache.get(PURGED_SANDBOX_PREFIX + str(sandbox_id)) is not None:
+        return True
+    mark = cache.get(PURGED_SESSION_PREFIX + str(session_id))
+    return mark is not None and mark != _RETENTION_MARK.encode()
+
+
 def last_attempt(cache: CacheBackend, sandbox_id: UUID) -> int:
     """The highest VM attempt the sandbox has had (0: none)."""
     raw = cache.get(LAST_ATTEMPT_PREFIX + str(sandbox_id))
