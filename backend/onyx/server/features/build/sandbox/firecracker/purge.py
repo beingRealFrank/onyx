@@ -1,7 +1,7 @@
 """Delete hooks for Firecracker harness sandboxes.
 
-Onyx calls these after a Craft session, a user or a tenant is deleted. They
-do nothing unless harness sandboxes run on Firecracker
+Onyx calls these after a Craft session, a chat session, a user or a tenant
+is deleted. They do nothing unless harness sandboxes run on Firecracker
 (`SANDBOX_RUNTIME=firecracker` and `SANDBOX_FC_TEMPLATE`), and they never
 raise: a failure is logged. The heavy client stack loads only when enabled.
 
@@ -48,6 +48,23 @@ def purge_harness_session(
             sandbox_id,
             session_id,
         )
+
+
+def purge_harness_sessions_in_background(
+    sandbox_id: UUID, session_ids: list[UUID]
+) -> None:
+    """For a delete of many sessions at once: each purge can wait for a VM
+    call, so the caller does not wait for them."""
+    if not HARNESS_SANDBOX_ENABLED or not session_ids:
+        return
+
+    def purge_sessions() -> None:
+        for session_id in session_ids:
+            purge_harness_session(sandbox_id, session_id)
+
+    start_thread_with_context(
+        target=purge_sessions, name="fc-session-purge", daemon=True
+    )
 
 
 def purge_harness_sandboxes(targets: dict[UUID, list[UUID]]) -> None:

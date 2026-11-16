@@ -164,6 +164,7 @@ from onyx.llm.models import (
     parse_user_selectable_reasoning_effort,
 )
 from onyx.llm.override_models import LLMOverride
+from onyx.microvm.configs import HARNESS_SANDBOX_ENABLED
 from onyx.secondary_llm_flows.chat_session_naming import (
     DEFAULT_CHAT_SESSION_NAME,
     generate_chat_session_name,
@@ -171,6 +172,11 @@ from onyx.secondary_llm_flows.chat_session_naming import (
 )
 from onyx.server.api_key_usage import check_api_key_usage
 from onyx.server.features.action_policies.models import ApprovalChoice
+from onyx.server.features.build.db.sandbox import get_sandbox_id_by_user_id
+from onyx.server.features.build.sandbox.firecracker.purge import (
+    purge_harness_session,
+    purge_harness_sessions_in_background,
+)
 from onyx.server.middleware.rate_limiting import get_feedback_rate_limiters
 from onyx.server.query_and_chat.chat_utils import (
     is_spreadsheet_mime_type,
@@ -830,9 +836,19 @@ def delete_all_chat_sessions(
             "Some generated files could not be deleted yet. Try again shortly.",
         )
     try:
-        delete_all_chat_sessions_for_user(user=user, db_session=db_session)
+        deleted_ids = delete_all_chat_sessions_for_user(
+            user=user, db_session=db_session
+        )
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
+    # A soft delete purges the sandbox files too: no one can restore a deleted chat.
+    sandbox_id = (
+        get_sandbox_id_by_user_id(db_session, user.id)
+        if HARNESS_SANDBOX_ENABLED
+        else None
+    )
+    if sandbox_id is not None:
+        purge_harness_sessions_in_background(sandbox_id, deleted_ids)
     # Read after the delete commits: a park either commits first or refuses.
     if not HARD_DELETE_CHATS:
         _end_parked_responses(parked_response_ids(db_session, user.id))
@@ -884,6 +900,14 @@ def delete_chat_session_by_id(
         )
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
+    # A soft delete purges the sandbox files too: no one can restore a deleted chat.
+    sandbox_id = (
+        get_sandbox_id_by_user_id(db_session, user_id)
+        if HARNESS_SANDBOX_ENABLED
+        else None
+    )
+    if sandbox_id is not None:
+        purge_harness_session(sandbox_id, session_id)
     # Read after the delete commits: a park either commits first or refuses.
     if not actual_hard_delete:
         _end_parked_responses(parked_response_ids(db_session, user.id, session_id))
@@ -1049,17 +1073,22 @@ def handle_send_chat_message(
         event=MilestoneRecordType.RAN_QUERY,
     )
 
+    # Authentication identifies the Discord bot's service API key, not a
+    # request field.
+    discord_bot = getattr(  # ods: ignore[getattr]
+        request.state, "discord_bot_api_key", False
+    )
     # Override origin to API when authenticated via API key or PAT
     # to prevent clients from polluting telemetry data
     if get_hashed_api_key_from_request(request) or get_hashed_pat_from_request(request):
-        chat_message_req.origin = MessageOrigin.API
+        chat_message_req.origin = (
+            MessageOrigin.DISCORDBOT if discord_bot else MessageOrigin.API
+        )
 
     # TODO(wenxi-onyx): Discord cannot show approval requests
     # yet, so turns of the Discord bot's service API key run the tools that
-    # would ask. Authentication identifies the key, not a request field.
-    ask_for_approval = not getattr(  # ods: ignore[getattr]
-        request.state, "discord_bot_api_key", False
-    )
+    # would ask.
+    ask_for_approval = not discord_bot
 
     # Multi-model streaming path: 2-3 LLMs in parallel (streaming only)
     is_multi_model = (

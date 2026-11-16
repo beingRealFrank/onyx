@@ -473,7 +473,8 @@ def update_chat_session(
 
 def delete_all_chat_sessions_for_user(
     user: User, db_session: Session, hard_delete: bool = HARD_DELETE_CHATS
-) -> None:
+) -> list[UUID]:
+    """Returns the ids of the chat sessions that were not deleted before."""
     user_id = user.id
 
     chat_sessions = (
@@ -485,29 +486,28 @@ def delete_all_chat_sessions_for_user(
         )
         .all()
     )
+    chat_session_ids = [chat_session.id for chat_session in chat_sessions]
+    newly_deleted_ids = [
+        chat_session.id for chat_session in chat_sessions if not chat_session.deleted
+    ]
 
+    # Only the sessions read above: one that a concurrent request creates now
+    # stays, instead of going without its cleanup.
     if hard_delete:
-        for chat_session in chat_sessions:
-            delete_messages_and_files_from_chat_session(chat_session.id, db_session)
+        for chat_session_id in chat_session_ids:
+            delete_messages_and_files_from_chat_session(chat_session_id, db_session)
         db_session.execute(
-            delete(ChatSession).where(
-                ChatSession.user_id == user_id,
-                ChatSession.onyxbot_flow.is_(False),
-                ChatSession.spawned_by_message_id.is_(None),
-            )
+            delete(ChatSession).where(ChatSession.id.in_(chat_session_ids))
         )
     else:
         db_session.execute(
             update(ChatSession)
-            .where(
-                ChatSession.user_id == user_id,
-                ChatSession.onyxbot_flow.is_(False),
-                ChatSession.spawned_by_message_id.is_(None),
-            )
+            .where(ChatSession.id.in_(chat_session_ids))
             .values(deleted=True)
         )
 
     db_session.commit()
+    return newly_deleted_ids
 
 
 def delete_chat_session(
@@ -974,6 +974,9 @@ def reserve_chat_response_ids(
         )
         .values(queue_paused_at=None)
     )
+    # One time_sent for the whole reservation: count_turn_responses groups a
+    # turn's responses by it. The database clock, like other messages.
+    time_sent = db_session.scalar(select(func.now()))
     reserved: list[ChatMessage] = []
     for display_name in model_display_names:
         msg = ChatMessage(
@@ -984,6 +987,7 @@ def reserve_chat_response_ids(
             token_count=15,
             message_type=MessageType.ASSISTANT,
             model_display_name=display_name,
+            time_sent=time_sent,
         )
         db_session.add(msg)
         reserved.append(msg)
@@ -1014,6 +1018,25 @@ def reserve_chat_response_ids(
 
     db_session.commit()
     return [message.id for message in reserved]
+
+
+def count_turn_responses(db_session: Session, response_id: int) -> int:
+    """The responses that one turn reserved together with `response_id`, the
+    response included: `reserve_chat_response_ids` gives them one time_sent.
+    A regeneration is another turn."""
+    response = aliased(ChatMessage)
+    return (
+        db_session.scalar(
+            select(func.count(ChatMessage.id))
+            .join(
+                response,
+                (ChatMessage.parent_message_id == response.parent_message_id)
+                & (ChatMessage.time_sent == response.time_sent),
+            )
+            .where(response.id == response_id)
+        )
+        or 0
+    )
 
 
 def set_response_model_names__no_commit(
