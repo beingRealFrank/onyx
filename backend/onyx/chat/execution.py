@@ -307,7 +307,8 @@ class ChatTurnExecution:
 
     def _publish(self, packet: Packet) -> None:
         # A resolution reports a saved decision, such as the rejection of a
-        # Stop, so the request's card shows it after the turn stops.
+        # Stop, so the request's card shows it after the turn stops. The
+        # packets of a finish amendment skip this check (Emitter).
         if not self.cancellation.cancelled or isinstance(
             packet.obj, ToolApprovalResolved
         ):
@@ -363,7 +364,10 @@ class ChatTurnExecution:
                     else Future[ChatResponseOutcome](),
                 )
                 emitter = Emitter(
-                    self._publish, persistence.model_index, self._query_observation
+                    self._publish,
+                    persistence.model_index,
+                    self._query_observation,
+                    publish_amendment=self.delivery.publish,
                 )
                 try:
                     worker = start_thread_future(

@@ -812,7 +812,7 @@ class CodeCell:
             self._lost_store_writes = lost_store_writes(snapshot.dropped)
             self._program_store = ProgramStore(snapshot)
             observer = self._attach(self._source, self._context, max_tokens)
-        self._start_driver(observer.invocation.cancellation, None)
+        self._start_driver(observer.invocation, None)
         return self._observe(observer, yield_seconds)
 
     def resume(
@@ -866,7 +866,7 @@ class CodeCell:
             with self._lock:
                 self._holds_slot = True
                 self._started_at = time.monotonic() - parked.state.elapsed_seconds
-            self._start_driver(invocation.cancellation, parked)
+            self._start_driver(invocation, parked)
         else:
             self._end_program(
                 SandboxResult(status="cancelled", error="The execution was cancelled.")
@@ -874,13 +874,17 @@ class CodeCell:
         return self._observe(observer, yield_seconds)
 
     def _start_driver(
-        self, run_cancellation: CancellationSignal, parked: SavedProgram | None
+        self, invocation: ToolInvocation, parked: SavedProgram | None
     ) -> None:
+        """The driver and the program's tool call threads join the run's work:
+        the run drains only after calls that outlive the program end."""
         try:
-            start_thread_future(
-                partial(self._drive, run_cancellation, parked),
+            driver = start_thread_future(
+                partial(self._drive, invocation, parked),
                 name=f"code-mode-cell-{self.id}",
             )
+            if invocation.run_work is not None:
+                invocation.run_work.track_operation(driver)
         except Exception as error:
             logger.exception("Code mode cell %s could not start", self.id)
             self._end_program(
@@ -1280,13 +1284,11 @@ class CodeCell:
 
     # Driver
 
-    def _drive(
-        self, run_cancellation: CancellationSignal, parked: SavedProgram | None
-    ) -> None:
+    def _drive(self, invocation: ToolInvocation, parked: SavedProgram | None) -> None:
         """Run the program, or continue the parked one, until it ends or parks."""
         # The cell's span is the parent of its nested tool spans.
         with function_span(CELL_SPAN_NAME, input=self._program.code) as span:
-            end = self._execute(run_cancellation, parked)
+            end = self._execute(invocation, parked)
             if isinstance(end, ParkedProgram):
                 span.span_data.output = "parked"
                 return
@@ -1305,14 +1307,14 @@ class CodeCell:
                 }
 
     def _execute(
-        self, run_cancellation: CancellationSignal, parked: SavedProgram | None
+        self, invocation: ToolInvocation, parked: SavedProgram | None
     ) -> SandboxResult | ParkedProgram:
         program = self._program
         store = self._program_store
         if store is None:
             raise RuntimeError(f"Cell {self.id} has no store")
         try:
-            with run_cancellation.on_cancel(lambda: self.stop("cancelled")):
+            with invocation.cancellation.on_cancel(lambda: self.stop("cancelled")):
                 return execute_program(
                     program.code,
                     stubs=program.stubs.program_text(program.code),
@@ -1324,6 +1326,9 @@ class CodeCell:
                     limits=program.limits,
                     on_print=self._print,
                     on_yield=self._yield_control,
+                    on_call_started=None
+                    if invocation.run_work is None
+                    else invocation.run_work.track_operation,
                     park=self._park,
                     parked=ParkedProgram(
                         state=parked.state, snapshot=parked.dump.restore().content
@@ -1415,6 +1420,29 @@ class CodeCell:
             self._holds_slot = False
             _running_cells.release(self._tenant_id, time.monotonic() - self._started_at)
 
+    def _stopped_call(self, call: CodeModeCall) -> CodeModeCall:
+        """A call still running when its program ended: the result that its
+        tool gives a stopped call (stopped_result), else unfinished."""
+        function = self._program.stubs.functions.get(call.function_name)
+        stopped = function.tool.stopped_result if function is not None else None
+        try:
+            result = stopped(call.id) if stopped is not None else None
+        except Exception:
+            logger.exception("Stopped result of code mode call %s failed", call.id)
+            result = None
+        if result is None:
+            return call.unfinished()
+        return _bounded_call(
+            call.model_copy(
+                update={
+                    "content": result.content,
+                    "state": "error" if result.is_error else "ok",
+                    "details": durable_details(result.details),
+                }
+            ),
+            MAX_SAVED_CALL_CHARS,
+        )
+
     def _end_program(self, end: SandboxResult) -> None:
         """Commit the program's store writes, make its end visible, end the
         requests of calls that still wait, and release the cell's running-cell
@@ -1454,7 +1482,7 @@ class CodeCell:
                 self._requests.clear()
                 for record in self._calls.values():
                     if record.ended_in is None:
-                        self._record(record.call.unfinished())
+                        self._record(self._stopped_call(record.call))
                 self._ended_as = (
                     "terminated"
                     if end.status == "cancelled" and self._stop == "terminated"
@@ -1680,6 +1708,7 @@ class CodeCell:
             messages=source.messages,
             recorded_results=source.recorded_results,
             agents=None,
+            run_work=source.run_work,
             trace_metadata={
                 "code_mode.call_id": self._call_id,
                 "code_mode.cell_id": self.id,

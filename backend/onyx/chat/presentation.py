@@ -548,8 +548,9 @@ class ResponsePresenter:
                         obj=overall_stop(event.outcome, event.failure),
                     )
                 )
+        amendment = isinstance(event, ToolResultAmendedEvent)
         for packet in output:
-            self.emitter.emit(packet)
+            self.emitter.emit(packet, amendment=amendment)
 
 
 def overall_stop(status: RunStatus, failure: RunFailure | None) -> OverallStop:

@@ -1226,3 +1226,28 @@ def test_child_notification_remaps_citations() -> None:
         assert agent.citation_mapping == {1: "existing", 2: "child", 3: "other-child"}
     finally:
         assert coordinator.close(10)
+
+
+def test_a_failed_tool_run_end_still_ends_the_other_tools_runs() -> None:
+    ended: list[str] = []
+
+    def fail() -> None:
+        ended.append("failed")
+        raise RuntimeError("the cache is unavailable")
+
+    class _OtherEchoTool(EchoTool):
+        @property
+        def name(self) -> str:
+            return "other_echo"
+
+    failing, other = EchoTool(), _OtherEchoTool()
+    failing.end_run = fail
+    other.end_run = lambda: ended.append("other")
+    agent = chat_agent(
+        FakeModelClient(lambda *_: AssistantMessage(content=[])), [failing, other]
+    )
+    assert agent.on_drained is not None
+
+    agent.on_drained()
+
+    assert ended == ["failed", "other"]

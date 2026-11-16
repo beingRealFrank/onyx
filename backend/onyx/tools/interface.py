@@ -190,10 +190,18 @@ class Tool(abc.ABC):
     # Set by tools that must not run twice: the saved result of a call that
     # stopped before it finished. See AgentTool.
     interrupted_result: ToolResult | None = None
+    # The result of a call (by call ID) that a Stop ended, from what it already
+    # did; None when it has none. See AgentTool.
+    stopped_result: Callable[[str], ToolResult | None] | None = None
     merge_list_argument: str | None = None
     merge_list_limit: int | None = None
     # Set on tools whose calls follow an action policy; see onyx/chat/tool_approvals.py.
     approval: ToolApprovalScope | None = None
+    # Ends what the tool keeps for one run, such as a sandbox turn. The root
+    # chat agent calls it once for tools that share it, after each of its runs
+    # finishes or suspends and the run's work drains (Agent.on_drained).
+    # Subagents share the root's tools and do not call it.
+    end_run: Callable[[], None] | None = None
 
     @property
     def execution_mode(self) -> ToolExecutionMode:
@@ -317,6 +325,7 @@ class Tool(abc.ABC):
             result_from_children=result_from_children,
             resume_with_input=resume_with_input,
             interrupted_result=self.interrupted_result,
+            stopped_result=self.stopped_result,
             display_name=self.display_name,
             approval_required=[
                 tool.name

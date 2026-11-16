@@ -51,6 +51,7 @@ from onyx.configs.chat_configs import (
 )
 from onyx.context.models import UserMemoryContext
 from onyx.file_store.models import ExtractedContextFiles, FileToolMetadata
+from onyx.llm.cancellation import AgentCancelled
 from onyx.llm.factory import get_llm_token_counter
 from onyx.llm.interfaces import LLM, GenerationContext, LLMUserIdentity
 from onyx.llm.models import (
@@ -89,6 +90,9 @@ from onyx.tools.tool_implementations.subagents.subagent_tools import (
 )
 from onyx.tools.tool_implementations.web_search.utils import extract_url_snippet_map
 from onyx.tracing.flows import LLMFlow
+from onyx.utils.logger import setup_logger
+
+logger = setup_logger()
 
 
 class ChatAgent(Agent, RestorableFeature):
@@ -141,6 +145,20 @@ class ChatAgent(Agent, RestorableFeature):
         self.configured_tools = list(tools)
         self.skills_catalog_message = skills_catalog_message(
             self.configured_tools, llm.config.max_input_tokens
+        )
+        # What ends per-run tool state, such as a sandbox turn; tools that
+        # share one appear once. Subagents get the root's tools, so only the
+        # root ends that state: a child's end would cut the root's calls short.
+        self._tool_run_ends = (
+            []
+            if is_subagent
+            else list(
+                dict.fromkeys(
+                    tool.end_run
+                    for tool in self.configured_tools
+                    if tool.end_run is not None
+                )
+            )
         )
         self.code_mode = code_mode
         # Each agent instance has its own cells, so a restored run has none open.
@@ -236,6 +254,7 @@ class ChatAgent(Agent, RestorableFeature):
             after_tool_call=self._finalize_tool,
             on_finish=None if self.code_cells is None else self._finished_cells,
             on_suspend=None if self.code_cells is None else self._suspended_cells,
+            on_drained=self._end_tool_runs if self._tool_run_ends else None,
         )
 
     def capture_state(self) -> ChatFeatureState:
@@ -464,6 +483,18 @@ class ChatAgent(Agent, RestorableFeature):
         if self.code_cells is None:
             return []
         return self._staged_release(partial(self.code_cells.suspend, results))
+
+    def _end_tool_runs(self) -> None:
+        """End per-run tool state, such as a sandbox turn, once a root run's
+        work, with the work of its foreground children, has drained."""
+        # One failed end must not keep the other tools' state.
+        for end_run in self._tool_run_ends:
+            try:
+                end_run()
+            except AgentCancelled:
+                logger.info("Tool run end stopped for cancellation")
+            except Exception:
+                logger.exception("Tool run end failed")
 
     def _staged_release(
         self, release: Callable[[], list[ToolResultAmendment]]

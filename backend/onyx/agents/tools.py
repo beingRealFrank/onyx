@@ -24,6 +24,7 @@ from onyx.llm.models import (
 )
 
 if TYPE_CHECKING:
+    from onyx.agents.concurrency import ExecutionWork
     from onyx.agents.models import (
         AgentInfo,
         AgentMessageReceipt,
@@ -250,6 +251,7 @@ class ToolInvocation:
         agents: AgentControl | None = None,
         trace_metadata: Mapping[str, JsonValue] | None = None,
         nested_calls: NestedCallGate | None = None,
+        run_work: "ExecutionWork | None" = None,
     ) -> None:
         self.call_id = call_id
         self.call_index = call_index
@@ -269,6 +271,10 @@ class ToolInvocation:
         # Decides the calls that the tool makes for the model, such as a
         # program's tool calls; None when no hook or approval decides calls.
         self.nested_calls = nested_calls
+        # The run's work. Work that outlives this call, such as threads it
+        # starts, joins it (`track_operation`): the run drains, ends its
+        # tools' runs and becomes idle only after that work.
+        self.run_work = run_work
         self._agents = agents
 
     @property
@@ -294,6 +300,10 @@ class AgentTool:
     A call that a lost execution owner left running runs again on restore, unless
     interrupted_result is set; then that result is saved as the call's result
     instead, with status error when it is an error.
+
+    stopped_result gives a call that a Stop ended its result from what the call
+    already did (None: it has none); the run applies it as an amendment. It
+    runs under the run's execution lock, so it must be short.
     """
 
     def __init__(
@@ -313,6 +323,7 @@ class AgentTool:
         ]
         | None = None,
         interrupted_result: ToolResult | None = None,
+        stopped_result: Callable[[str], ToolResult | None] | None = None,
         display_name: str | None = None,
         approval_required: Collection[str] = (),
     ) -> None:
@@ -325,6 +336,7 @@ class AgentTool:
         self.execution_mode = execution_mode
         self.merge_arguments = merge_arguments
         self.interrupted_result = interrupted_result
+        self.stopped_result = stopped_result
         self.display_name = display_name
         # Names of calls, this tool's own or those it makes for the model, that
         # wait for the user's approval before they run.
@@ -340,6 +352,7 @@ class AgentTool:
             execution_mode=self.execution_mode,
             merge_arguments=self.merge_arguments,
             interrupted_result=self.interrupted_result,
+            stopped_result=self.stopped_result,
             display_name=self.display_name,
             approval_required=self.approval_required,
         )

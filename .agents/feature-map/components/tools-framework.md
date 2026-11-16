@@ -155,7 +155,10 @@ functions of `execute_code`; `chat/prompt_utils.py:callable_tools` reads it.
 When the run completes normally, every call gets a result: `ToolBatch` answers
 an unknown tool name, malformed arguments or truncated arguments with an error
 result. On Stop or a run failure, a running call ends with no result (status
-`CANCELLED` or `ERROR`) and renders with no details. `_invoke_tool` discards a
+`CANCELLED` or `ERROR`) and renders with no details, unless its tool sets
+`stopped_result`: on Stop, `agents/runtime.py:Run._stopped_results` gives the
+call that result as an amendment (a code mode program's end does the same for
+its running calls, `CodeCell._stopped_call`). `_invoke_tool` discards a
 result that finishes after cancellation. Side effects that the tool already
 made are not undone, so check `invocation.cancellation` before irreversible
 work.

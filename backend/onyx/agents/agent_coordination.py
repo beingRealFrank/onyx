@@ -543,8 +543,9 @@ class AgentCoordinator:
         run.add_done_callback(lambda: run.add_idle_callback(start))
         return completion
 
-    def track_child_work(self, parent: Run, run_ids: Sequence[str]) -> None:
-        """Retain local child workers and cleanup without reading remote state."""
+    def track_child_work(self, work: ExecutionWork, run_ids: Sequence[str]) -> None:
+        """Retain local child workers and cleanup in `work` without reading
+        remote state."""
         executions: list[Run] = []
         cleanup: list[Future[None]] = []
         with self._state.lock:
@@ -556,9 +557,10 @@ class AgentCoordinator:
                     executions.append(tracked.execution)
                 cleanup.extend(tracked.cleanup)
         for execution in executions:
-            parent.track_child_work(execution)
+            work.tracker.started()
+            execution.add_idle_callback(work.tracker.finished)
         for completion in cleanup:
-            parent.work.track_operation(completion)
+            work.track_operation(completion)
 
     def complete(self, run: Run) -> None:
         """Save terminal output before resolving child completion."""
@@ -1257,7 +1259,7 @@ class RunCoordination:
         failure: RunFailed | None = None
         records: list[RunState] = []
         try:
-            self.coordinator.track_child_work(self.run, child_run_ids)
+            self.coordinator.track_child_work(self.run.work, child_run_ids)
             if cancel:
                 cancellation_error: Exception | None = None
                 for run_id in child_run_ids:
@@ -1304,7 +1306,7 @@ class RunCoordination:
                     ) from error
         finally:
             # Cancelling a suspended child can start a new worker before cleanup.
-            self.coordinator.track_child_work(self.run, child_run_ids)
+            self.coordinator.track_child_work(self.run.work, child_run_ids)
             self._links.close()
         if failure is not None:
             raise failure
