@@ -1,12 +1,6 @@
 import { JSX, Key, useMemo } from "react";
 import { useTranslations } from "next-intl";
-import {
-  SvgCheckCircle,
-  SvgCircle,
-  SvgSparkle,
-  SvgTerminal,
-  SvgXCircle,
-} from "@opal/icons";
+import { STEP_ICONS } from "@/lib/timeline/icons";
 import hljs from "highlight.js/lib/core";
 import bash from "highlight.js/lib/languages/bash";
 import {
@@ -157,7 +151,7 @@ function ThinkingStep({ step, isLastStep, isHover }: ThinkingStepProps) {
 
   return (
     <StepContainer
-      stepIcon={SvgSparkle}
+      stepIcon={STEP_ICONS.agent}
       header={t("codingAgent.thinking.header")}
       isLastStep={isLastStep}
       isHover={isHover}
@@ -181,10 +175,10 @@ function bashStepHeader(call: BashStepView, t: TimelineTranslate): string {
 }
 
 function bashStepIcon(call: BashStepView) {
-  if (!call.isComplete) return SvgTerminal;
+  if (!call.isComplete) return STEP_ICONS.running;
   const failed =
     call.error !== null || (call.exit_code !== null && call.exit_code !== 0);
-  return failed || call.timed_out ? SvgXCircle : SvgCheckCircle;
+  return failed || call.timed_out ? STEP_ICONS.failed : STEP_ICONS.execute;
 }
 
 function BashStepBody({ call }: { call: BashStepView }) {
@@ -303,7 +297,7 @@ function CodingTaskStep({
 
   return (
     <StepContainer
-      stepIcon={SvgCircle}
+      stepIcon={STEP_ICONS.thinking}
       header={t("codingAgent.task.header")}
       collapsible={true}
       isLastStep={isLastStep}
@@ -330,7 +324,7 @@ function ResponseStep({ answer, isLastStep, isHover }: ResponseStepProps) {
 
   return (
     <StepContainer
-      stepIcon={SvgCheckCircle}
+      stepIcon={STEP_ICONS.done}
       header={t("codingAgent.response.header")}
       isLastStep={isLastStep}
       isHover={isHover}
