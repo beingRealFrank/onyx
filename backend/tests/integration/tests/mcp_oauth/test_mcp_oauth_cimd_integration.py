@@ -6,6 +6,7 @@ from urllib.parse import parse_qs, urlparse
 import httpx
 
 from onyx.db.enums import (
+    ActionPolicy,
     MCPAuthenticationPerformer,
     MCPAuthenticationType,
     MCPOAuthProviderMode,
@@ -19,7 +20,10 @@ from tests.integration.common_utils.cimd_oauth import (
 from tests.integration.common_utils.constants import API_SERVER_URL
 from tests.integration.common_utils.http_client import client
 from tests.integration.common_utils.managers.chat import ChatSessionManager
-from tests.integration.common_utils.managers.mock_llm import MockLLMScript
+from tests.integration.common_utils.managers.mock_llm import (
+    MockLLMScript,
+    tool_call_reply,
+)
 from tests.integration.common_utils.managers.persona import PersonaManager
 from tests.integration.common_utils.test_models import DATestPersona, DATestUser
 from tests.integration.mock_services.mock_llm_server.models import (
@@ -270,6 +274,13 @@ def test_mcp_oauth_cimd_only_flow(
             for tool in db_tools_response.json()["tools"]
             if tool["name"] == MCP_TOOL_NAME
         )
+        # The tool runs without asking, so the chat call does not wait for approval.
+        client.patch(
+            f"{API_SERVER_URL}/admin/mcp/server/{server_id}",
+            json={"action_policies": {MCP_TOOL_NAME: ActionPolicy.ALWAYS.value}},
+            headers=admin_user.headers,
+            cookies=admin_user.cookies,
+        ).raise_for_status()
         persona = PersonaManager.create(
             name="integration-mcp-cimd-persona",
             tool_ids=[tool_id],
@@ -283,20 +294,16 @@ def test_mcp_oauth_cimd_only_flow(
             force_reauthentication=True,
         )
 
+        callable_name = f"mcp__{server_id}__{MCP_SERVER_NAME}__{MCP_TOOL_NAME}"
         mock_llm.conversation(
             "chat",
-            Reply(
-                tool_calls=[
-                    ToolCall(
-                        id=MCP_TOOL_CALL_ID,
-                        name=MCP_TOOL_NAME,
-                        arguments={"name": "integration-test"},
-                    )
-                ],
-                conditions=RequestConditions(
-                    offers=[MCP_TOOL_NAME],
-                    tool_choice="auto",
+            tool_call_reply(
+                ToolCall(
+                    id=MCP_TOOL_CALL_ID,
+                    name=callable_name,
+                    arguments={"name": "integration-test"},
                 ),
+                tool_choice="auto",
             ),
             Reply(
                 text="The MCP tool ran.",
@@ -315,7 +322,7 @@ def test_mcp_oauth_cimd_only_flow(
         )
         assert chat_response.error is None
         assert any(
-            tool_call.tool_name == MCP_TOOL_NAME
+            tool_call.tool_name == callable_name
             and tool_call.tool_args == {"name": "integration-test"}
             for tool_call in chat_response.tool_call_debug
         )

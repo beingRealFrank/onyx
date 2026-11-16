@@ -5,8 +5,9 @@
 > plugin is on in Default Chat.
 
 **Verified against:** `a4e97fcea1` (2026-10-29)
-**Edition:** CE. Craft apps, Craft availability and Craft approval settings
-appear only when Craft is available. Group or user restriction needs EE.
+**Edition:** CE. Craft apps and Craft availability appear only when Craft is
+available. MCP approval settings do not need Craft.
+Group or user restriction needs EE.
 
 ---
 
@@ -93,6 +94,22 @@ whose preference has `enabled_in_chat` false. On the web,
 `lib/plugins/chat.ts:effectiveChatPreferredToolId` drops an unavailable preferred plugin tool in
 Default Chat when the user's preference turns it off.
 
+**Tool selection of an existing chat.** The server owns it.
+`lib/tools/hooks.ts:useToolConfiguration` reads it from the chat-session detail
+(`tool_selection`, held in the chat session store). When a signed-in user
+changes tools or filters in an existing chat, the store keeps the change as
+an unconfirmed edit, and the chat's save loop PATCHes
+`/api/chat/chat-session/{id}/tool-selection` at once with only the changed
+part: the tool fields or `internal_search_filters`. One request runs at a time
+per chat; later edits go out together in the next one. The server merges the
+fields that the body sets. The response is the stored selection, or null for a
+chat that stores no content, whose only copy stays in the tab. A chat load that
+started before a save was confirmed does not replace the saved copy.
+`flushToolSelection` resolves when the chat's save loop ends, so a caller can
+wait for the saved choice. A send that creates a chat hands its selection to that chat's
+composer, which saves it. Session storage keeps only the selection of a chat
+that does not exist yet.
+
 ---
 
 ## Contracts and traps
@@ -157,11 +174,24 @@ Default Chat when the user's preference turns it off.
     `/admin/openapi-actions` only redirect.** Their pages map to the plugin
     routes through the helpers in `web/src/lib/plugins/routes.ts` and keep query
     parameters. New links go to `/admin/plugins`.
-11. `action-policies-craft-only` **Action policies apply only in Craft.** The
-    Auto-approve, Ask and Disabled settings in the plugin editors go to the
-    Craft proxy ([[craft-external-apps]]). `MCPTool` and `CustomTool` in Chat
-    never read them and run every call with no approval. The plugin UI must not
-    show read or write badges to members or promise an approval in Chat.
+11. `action-policies-mcp-and-craft` **Action policies apply to Craft and to MCP
+    tools in Chat, not to OpenAPI tools.** The Auto-approve, Ask and Disabled
+    settings in the plugin editors go to the Craft proxy
+    ([[craft-external-apps]]) and to the chat approval gate
+    ([[mcp-and-custom-tools#chat-approval-needs-waiting-client]]). `CustomTool`
+    never reads them and runs every call with no approval. The admin tools
+    editor (`sections/actions/MCPServerToolsEditor.tsx`) shows the policies with
+    or without Craft, and so does the user-management switch
+    (`sections/actions/modals/MCPServerDetailsPage.tsx`). The member approval
+    tab (`sections/plugins/MemberPluginDetailModal.tsx`) shows for a connected
+    MCP server whose `users_can_manage_policies` is on, with or without Craft
+    and whatever its `available_in_craft`. It reads and writes
+    `/action-policies/{kind}/{target_id}` (`server/features/action_policies/api.py`),
+    which checks server access but not Craft. External apps on the same routes
+    still need Craft. The Craft catalog list (`/build/action-policies`) and task
+    choices cover only Craft-enabled MCP servers
+    (`db/action_policy.py:list_action_policies`). The plugin UI must not show
+    read or write badges to members or promise an approval for OpenAPI tools.
 12. `shared-oauth-config-shared-connection` **OpenAPI tools that share an
     `OAuthConfig` share each user's connection.** `OAuthUserToken` is unique on
     the configuration and the user, not the tool. A member who connects or

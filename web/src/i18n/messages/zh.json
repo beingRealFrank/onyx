@@ -122,6 +122,9 @@
       "authenticate": {
         "label": "身份验证"
       },
+      "codingAgentIncognito": {
+        "tooltip": "无痕模式下无法使用编码智能体"
+      },
       "configure": {
         "tooltip": "配置"
       },
@@ -817,6 +820,7 @@
       "search": {
         "placeholder": "搜索操作..."
       },
+      "selectionSaveFailed": "无法保存此聊天的工具选择。",
       "serverFallback": {
         "label": "服务器"
       },
@@ -12449,6 +12453,7 @@
     },
     "input": {
       "appInputBar": {
+        "subagentsWorking": "子代理正在工作",
         "attachFilesButton": {
           "tooltip": "附加文件"
         },
@@ -12457,6 +12462,7 @@
         },
         "deepResearchButton": {
           "disabledTooltip": "多模型模式下无法使用深度研究",
+          "incognitoTooltip": "无痕模式下无法使用深度研究",
           "label": "深度研究"
         },
         "incognitoNotice": {
@@ -12485,6 +12491,24 @@
         "voiceSetupButton": {
           "ariaLabel": "设置语音",
           "tooltip": "未配置语音。请在管理员设置中配置。"
+        },
+        "pendingMessages": {
+          "keyboardHint": "Enter 发送 · Ctrl 或 Command + Enter 加入队列",
+          "multiModelHint": "比较模型时无法加入队列。请选择一个模型以使用队列。",
+          "attachmentsHint": "请在此回复结束后发送附件。",
+          "chooseResponseHint": "请先选择回复，再将消息加入队列。",
+          "incognitoHint": "在无痕聊天中，请等待回复结束。",
+          "sendHint": "在此回复的下一步发送",
+          "interruptHint": "中断当前工作并发送此消息",
+          "sendLabel": "发送",
+          "queueLabel": "排队",
+          "interruptKeyboardHint": "Enter 中断 · Ctrl 或 Command + Enter 加入队列",
+          "interruptLabel": "中断",
+          "waitHint": "请等待回复完成。",
+          "ctrlKey": "Ctrl"
+        },
+        "stopSubagentsButton": {
+          "label": "停止子代理"
         }
       },
       "baseInputBar": {
@@ -12534,9 +12558,6 @@
         "content": {
           "ariaLabel": "技能选择器"
         },
-        "empty": {
-          "text": "没有匹配的技能"
-        },
         "mcpServersGroup": {
           "label": "MCP 服务器"
         },
@@ -12575,6 +12596,19 @@
           "tooltip": "在输入框中用完整文本替换此卡片"
         }
       },
+      "richTile": {
+        "mentionTile": {
+          "removeButton": {
+            "ariaLabel": "移除 {name}"
+          }
+        },
+        "pasteTile": {
+          "ariaLabel": "粘贴的文本：{preview}，{meta}",
+          "removeButton": {
+            "ariaLabel": "移除粘贴的文本"
+          }
+        }
+      },
       "plusMenuButton": {
         "trigger": {
           "ariaLabel": "打开添加菜单",
@@ -12583,16 +12617,26 @@
       },
       "queuedMessageBar": {
         "discardButton": {
-          "tooltip": "移除排队的消息"
+          "tooltip": "移除排队的消息",
+          "ariaLabel": "移除排队的消息：{message}"
         },
         "editHint": {
           "label": "编辑 ·"
         },
-        "item": {
-          "ariaLabel": "切换排队的消息"
-        },
         "removeHint": {
           "label": "移除"
+        },
+        "editButton": {
+          "tooltip": "编辑队列中的消息",
+          "clearDraftTooltip": "请清空草稿后再编辑队列中的消息",
+          "ariaLabel": "编辑排队的消息：{message}"
+        },
+        "sendButton": {
+          "tooltip": "中断当前工作并发送此消息",
+          "ariaLabel": "立即发送：{message}"
+        },
+        "sendHint": {
+          "label": "立即发送 ·"
         }
       },
       "sharedAppInputBar": {
@@ -12602,6 +12646,17 @@
         "startSessionButton": {
           "label": "开始新会话"
         }
+      },
+      "pendingMessages": {
+        "submitFailed": "无法提交消息。",
+        "withdrawFailed": "无法移除待处理消息。",
+        "loadFailed": "无法加载待处理消息。",
+        "alreadyAccepted": "此消息已被接受，不再处于待处理状态。",
+        "interruptFailed": "暂时无法发送此消息。消息仍处于待处理状态。",
+        "stopSubagentsFailed": "无法停止子代理。"
+      },
+      "pendingToolApproval": {
+        "toast": "请先批准或拒绝待处理的工具调用。"
       }
     },
     "mcpApiKey": {
@@ -12697,6 +12752,9 @@
         "timedOut": {
           "text": "回复已达到时间限制，因此已停止。"
         }
+      },
+      "agentResults": {
+        "received": "已收到子代理结果"
       },
       "codeBlock": {
         "copyButton": {
@@ -12845,11 +12903,6 @@
         },
         "stoppedStatus": {
           "text": "图片生成已停止"
-        }
-      },
-      "markdownTable": {
-        "copyButton": {
-          "label": "复制表格"
         }
       },
       "memoizedLink": {
@@ -13046,6 +13099,9 @@
           },
           "working": {
             "label": "处理中"
+          },
+          "waitingForApproval": {
+            "label": "正在等待你的批准"
           }
         },
         "internalSearch": {
@@ -13182,6 +13238,9 @@
             "status": "正在搜索网页"
           }
         }
+      },
+      "toolApproval": {
+        "agentRequest": "{agent} 想要运行 {tool}"
       },
       "toolbar": {
         "dislikeButton": {
@@ -14400,6 +14459,54 @@
         "decision": "决策",
         "vision": "视觉"
       }
+    },
+    "payloadView": {
+      "empty": {
+        "label": "无载荷。"
+      },
+      "showLess": {
+        "button": "收起"
+      },
+      "showMore": {
+        "button": "展开"
+      }
+    },
+    "approvalCard": {
+      "approveChat": {
+        "button": "在此聊天中批准",
+        "tooltip": "立即批准，并在此聊天的剩余时间内运行此工具而不再询问"
+      },
+      "approveOnce": {
+        "ariaLabel": "仅批准此操作一次",
+        "button": "批准一次"
+      },
+      "approveSession": {
+        "button": "批准整个会话",
+        "tooltip": "批准此会话中的匹配操作"
+      },
+      "deadline": "请在 {time} 前批准",
+      "header": {
+        "required": "已请求批准：{headline}"
+      },
+      "headline": {
+        "multiAction": "{app} 中的 {count, plural, one {# 个操作} other {# 个操作}}",
+        "singleAction": "{app} 中的 {action}"
+      },
+      "reject": {
+        "ariaLabel": "拒绝此操作",
+        "button": "拒绝"
+      },
+      "record": {
+        "approved": "已批准：{headline}",
+        "closed": "不再等待：{headline}",
+        "disabled": "已禁用：{headline}",
+        "expired": "已超时：{headline}",
+        "rejected": "未批准：{headline}",
+        "approvedForChat": "已在此聊天中批准：{headline}",
+        "approvedForSession": "已在此会话中批准：{headline}"
+      },
+      "submitError": "无法提交你的决定。请重试。",
+      "actionWithDescription": "{action}：{description}"
     }
   },
   "craft": {
@@ -14412,50 +14519,6 @@
       },
       "switch": {
         "ariaLabel": "切换代理"
-      }
-    },
-    "approvals": {
-      "approveOnce": {
-        "ariaLabel": "仅批准此操作一次",
-        "button": "批准一次"
-      },
-      "approveSession": {
-        "button": "批准整个会话",
-        "tooltip": "批准此会话中的匹配操作"
-      },
-      "details": {
-        "hideAriaLabel": "隐藏详情",
-        "showAriaLabel": "显示详情"
-      },
-      "header": {
-        "required": "需要批准：{headline}"
-      },
-      "headline": {
-        "multiAction": "{app} 中的 {count, plural, one {# 个操作} other {# 个操作}}",
-        "singleAction": "{app} 中的 {action}"
-      },
-      "payload": {
-        "empty": {
-          "label": "无载荷。"
-        },
-        "showLess": {
-          "button": "收起"
-        },
-        "showMore": {
-          "button": "展开"
-        }
-      },
-      "reject": {
-        "ariaLabel": "拒绝此操作",
-        "button": "拒绝"
-      },
-      "status": {
-        "approved": "已批准",
-        "rejected": "已拒绝",
-        "expired": "已过期"
-      },
-      "submit": {
-        "errorFallback": "提交决定失败"
       }
     },
     "apps": {
@@ -14593,7 +14656,7 @@
         "duplicateSkillName": "应用“{appName}”已有名为“{skillName}”的关联技能。请上传其他名称的技能。"
       },
       "mcpPolicy": {
-        "description": "配置 Craft 智能体可以使用此 MCP 服务器的工具执行的操作。",
+        "description": "选择在聊天和 Craft 中哪些工具自动运行、请求批准或被禁用。",
         "emptyPolicies": "此服务器上没有已启用的工具。请先在 MCP 操作页面启用工具。",
         "saveButton": "保存",
         "title": "编辑 {name}"
@@ -15790,7 +15853,7 @@
     "actionPolicies": {
       "appTitle": "{name} 审批设置",
       "title": "审批设置",
-      "personalDescription": "这些设置决定 Craft 对话和新任务中的操作是自动运行还是需要批准；现有任务保留各自的设置。",
+      "personalDescription": "这些设置决定 Craft 对话、新任务和聊天中的 MCP 工具调用是自动运行还是需要批准；现有任务保留各自的设置。",
       "taskDescription": "选择此任务可使用的插件，并管理哪些操作可自动执行。更改仅适用于此任务。",
       "newTaskDescription": "启用插件后，将以您当前的操作设置为初始设置。",
       "workspace_disabled": "工作区已禁用",
@@ -15806,9 +15869,6 @@
       "saveError": "无法保存审批设置。",
       "emptyActions": "没有已知操作。未知操作需要审批。",
       "emptyApps": "没有可用应用。",
-      "expired": "审批已超时。操作未执行。",
-      "rejected": "请求已拒绝。此请求未执行。",
-      "deadline": "请在 {time} 前批准",
       "agentPermissionRequired": "某项操作需要审批，因此本次运行已停止。请检查权限，然后重新运行任务。",
       "enableForTask": "为此任务启用",
       "enableAppForTask": "为此任务启用 {app}",
@@ -16443,6 +16503,12 @@
       "title": "对话",
       "toasts": {
         "saveFailed": "保存偏好设置失败"
+      },
+      "sendBehavior": {
+        "title": "工作期间的发送行为",
+        "description": "选择在回答过程中按 Enter 键和发送按钮的行为。Ctrl/Cmd+Enter 始终将后续消息加入队列。",
+        "afterStep": "当前步骤完成后",
+        "interrupt": "中断当前工作"
       }
     },
     "connectors": {

@@ -8,6 +8,7 @@ import {
 } from "@/app/app/services/streamingModels";
 import { useChatSessionStore } from "@/app/app/stores/useChatSessionStore";
 import AgentMessage from "@/app/app/message/messageComponents/AgentMessage";
+import { useToolApprovalUi } from "@/lib/chat/toolApprovals";
 import { FullChatState } from "@/app/app/message/messageComponents/types";
 import type { MinimalAgent } from "@/lib/agents/types";
 
@@ -25,6 +26,11 @@ jest.mock("@/providers/VoiceModeProvider", () => ({
     activeMessageNodeId: null,
     isAwaitingAutoPlaybackStart: false,
   }),
+}));
+
+jest.mock("@/app/app/message/messageComponents/CustomToolAuthCard", () => ({
+  __esModule: true,
+  default: ({ toolName }: { toolName: string }) => <p>Connect {toolName}</p>,
 }));
 
 const SESSION_ID = "session-1";
@@ -89,8 +95,6 @@ function message(
   };
 }
 
-// A session that just sent a follow-up: the gate is closed and the new
-// answer is the latest node.
 function seedSessionAwaitingAnswer() {
   const messageTree = upsertMessages(
     new Map(),
@@ -106,54 +110,13 @@ function seedSessionAwaitingAnswer() {
   store.createSession(SESSION_ID, {
     messageTree,
     chatState: "input",
-    latestMessageRenderComplete: false,
   });
   store.setCurrentSession(SESSION_ID);
-}
-
-function renderAnswer(messageNodeId: number): void {
-  render(
-    <AgentMessage
-      rawPackets={answerPackets}
-      chatState={chatState}
-      nodeId={messageNodeId}
-      llmManager={null}
-      hideFooter
-      disableTTS
-    />
-  );
-}
-
-function renderComplete(): boolean | undefined {
-  return useChatSessionStore.getState().sessions.get(SESSION_ID)
-    ?.latestMessageRenderComplete;
 }
 
 afterEach(() => {
   useChatSessionStore.setState({ currentSessionId: null, sessions: new Map() });
   jest.useRealTimers();
-});
-
-describe("AgentMessage queue gate", () => {
-  beforeEach(() => {
-    seedSessionAwaitingAnswer();
-  });
-
-  test("releases the gate when the latest answer arrives complete", async () => {
-    // The whole stream, stop packet included, landed before the first
-    // render, so the renderer mounts with animate=false.
-    renderAnswer(NEW_ANSWER_NODE_ID);
-
-    expect(await screen.findByText("A quick answer.")).toBeInTheDocument();
-    await waitFor(() => expect(renderComplete()).toBe(true));
-  });
-
-  test("keeps the gate closed when an older answer mounts", async () => {
-    renderAnswer(OLD_ANSWER_NODE_ID);
-
-    expect(await screen.findByText("A quick answer.")).toBeInTheDocument();
-    expect(renderComplete()).toBe(false);
-  });
 });
 
 test("parallel search tabs complete independently", async () => {
@@ -423,6 +386,76 @@ test("a failed streaming answer stops its existing autoplay session", async () =
   expect(mockStopTTS).toHaveBeenCalledTimes(1);
 });
 
+describe("a replay that rebuilds the packets", () => {
+  const start = (): Packet => ({
+    placement,
+    obj: {
+      type: PacketType.MESSAGE_START,
+      id: "answer",
+      content: "",
+      final_documents: null,
+    },
+  });
+  const delta = (content: string): Packet => ({
+    placement,
+    obj: { type: PacketType.MESSAGE_DELTA, content },
+  });
+  const stop = (): Packet => ({ placement, obj: { type: PacketType.STOP } });
+  const props = {
+    nodeId: 202,
+    chatState,
+    parentMessage: message(201, null, "user"),
+    llmManager: null,
+    hideFooter: true,
+    disableTTS: true,
+  };
+
+  test("a longer replay replaces the output of a lost stream", async () => {
+    const lost = [start(), delta("Kept text."), stop()];
+    const view = render(
+      <AgentMessage {...props} rawPackets={lost} packetCount={lost.length} />
+    );
+    expect(await screen.findByText("Kept text.")).toBeInTheDocument();
+
+    const replay = [
+      start(),
+      delta("Kept text."),
+      delta(" Replayed text."),
+      delta(" Live text."),
+    ];
+    view.rerender(
+      <AgentMessage
+        {...props}
+        rawPackets={replay}
+        packetCount={replay.length}
+      />
+    );
+
+    expect(
+      await screen.findByText("Kept text. Replayed text. Live text.")
+    ).toBeInTheDocument();
+  });
+
+  test("a replay of the same length replaces the shown packets", async () => {
+    const saved = [start(), delta("Old text."), stop()];
+    const view = render(
+      <AgentMessage {...props} rawPackets={saved} packetCount={saved.length} />
+    );
+    expect(await screen.findByText("Old text.")).toBeInTheDocument();
+
+    const replay = [start(), delta("New text."), stop()];
+    view.rerender(
+      <AgentMessage
+        {...props}
+        rawPackets={replay}
+        packetCount={replay.length}
+      />
+    );
+
+    expect(await screen.findByText("New text.")).toBeInTheDocument();
+  });
+});
+
 test("a timed out answer explains its deadline without claiming the user stopped it", async () => {
   seedSessionAwaitingAnswer();
   const packets: Packet[] = [
@@ -450,7 +483,6 @@ test("a timed out answer explains its deadline without claiming the user stopped
   expect(
     screen.queryByText("User has stopped generation")
   ).not.toBeInTheDocument();
-  await waitFor(() => expect(renderComplete()).toBe(true));
 });
 
 test("code mode reads as the tool calls it makes", async () => {
@@ -460,7 +492,11 @@ test("code mode reads as the tool calls it makes", async () => {
   const lookup = (at: typeof cell, done: boolean): Packet[] => [
     {
       placement: { ...at, sub_turn_index: 0 },
-      obj: { type: PacketType.CUSTOM_TOOL_START, tool_name: "lookup_orders" },
+      obj: {
+        type: PacketType.CUSTOM_TOOL_START,
+        tool_name: "lookup_orders",
+        display_name: "lookup_orders",
+      },
     },
     ...(done
       ? ([
@@ -469,6 +505,7 @@ test("code mode reads as the tool calls it makes", async () => {
             obj: {
               type: PacketType.CUSTOM_TOOL_DELTA,
               tool_name: "lookup_orders",
+              display_name: "lookup_orders",
               response_type: "text",
               data: "3 orders",
             },
@@ -584,7 +621,11 @@ test("a later report of a code mode call replaces what the step shows", async ()
   });
   const start = (at: typeof cell): Packet => ({
     placement: { ...at, ...call },
-    obj: { type: PacketType.CUSTOM_TOOL_START, tool_name: "lookup_orders" },
+    obj: {
+      type: PacketType.CUSTOM_TOOL_START,
+      tool_name: "lookup_orders",
+      display_name: "lookup_orders",
+    },
   });
   // The call is running when the program yields; the wait_code observation
   // reports it again with as many packets.
@@ -646,6 +687,105 @@ test("a later report of a code mode call replaces what the step shows", async ()
   }
 });
 
+test("a program call whose stream stopped for approval shows a waiting header and, once decided, the record", async () => {
+  seedSessionAwaitingAnswer();
+  useToolApprovalUi.setState({ localStatuses: new Map(), nudge: null });
+  const cell = { turn_index: 0, tab_index: 0 };
+  const nested = { ...cell, sub_turn_index: 0 };
+  // The program's call starts, then the request arrives at the cell's placement.
+  const packets: Packet[] = [
+    {
+      placement: cell,
+      obj: { type: PacketType.CODE_MODE_START, code: "await create_issue()" },
+    },
+    {
+      placement: nested,
+      obj: {
+        type: PacketType.CUSTOM_TOOL_START,
+        tool_name: "mcp__3__github__create_issue",
+        display_name: "Create issue",
+      },
+    },
+    {
+      placement: cell,
+      obj: {
+        type: PacketType.TOOL_APPROVAL_REQUEST,
+        approval_id: "approval",
+        tool_call_id: "nested-call",
+        tool_name: "mcp__3__github__create_issue",
+        display_name: "Create issue",
+        arguments: { title: "Fix login" },
+        agent_name: null,
+      },
+    },
+    // The stream ends while the call waits; the response is not finished.
+    {
+      placement: { turn_index: 0 },
+      obj: { type: PacketType.STOP, stop_reason: StopReason.AWAITING_APPROVAL },
+    },
+  ];
+  const view = render(
+    <AgentMessage
+      rawPackets={packets}
+      packetCount={packets.length}
+      chatState={chatState}
+      nodeId={NEW_ANSWER_NODE_ID}
+      llmManager={null}
+      hideFooter
+      disableTTS
+    />
+  );
+  try {
+    expect(
+      await screen.findByText("Waiting for your approval")
+    ).toBeInTheDocument();
+    // The waiting card shows in the transcript's trailing region.
+    expect(screen.queryByTestId("tool-approval-card")).not.toBeInTheDocument();
+    expect(screen.queryByText("Working")).not.toBeInTheDocument();
+
+    // A decision this client made ends the wait before its packet arrives.
+    act(() =>
+      useToolApprovalUi.setState({
+        localStatuses: new Map([["approval", "approved"]]),
+      })
+    );
+    expect(
+      screen.queryByText("Waiting for your approval")
+    ).not.toBeInTheDocument();
+
+    const resolved: Packet[] = [
+      ...packets,
+      {
+        placement: cell,
+        obj: {
+          type: PacketType.TOOL_APPROVAL_RESOLVED,
+          approval_id: "approval",
+          outcome: "approved",
+        },
+      },
+    ];
+    view.rerender(
+      <AgentMessage
+        rawPackets={resolved}
+        packetCount={resolved.length}
+        chatState={chatState}
+        nodeId={NEW_ANSWER_NODE_ID}
+        llmManager={null}
+        hideFooter
+        disableTTS
+      />
+    );
+    expect(
+      await screen.findAllByText("Approved: Create issue")
+    ).not.toHaveLength(0);
+    expect(
+      screen.queryByText("Waiting for your approval")
+    ).not.toBeInTheDocument();
+  } finally {
+    view.unmount();
+  }
+});
+
 test("a running program shows working over a parallel turn", async () => {
   seedSessionAwaitingAnswer();
   const packets: Packet[] = [0, 1].map((tab_index) => ({
@@ -685,7 +825,11 @@ test("an expanded step keeps its state when a call is inserted before it", async
   ): Packet[] => [
     {
       placement,
-      obj: { type: PacketType.CUSTOM_TOOL_START, tool_name: toolName },
+      obj: {
+        type: PacketType.CUSTOM_TOOL_START,
+        tool_name: toolName,
+        display_name: toolName,
+      },
     },
     {
       placement,
@@ -833,7 +977,6 @@ test("generated images from earlier tool steps lead the answer once", async () =
     expect(images[0]?.compareDocumentPosition(answer)).toBe(
       Node.DOCUMENT_POSITION_FOLLOWING
     );
-    await waitFor(() => expect(renderComplete()).toBe(true));
   } finally {
     view.unmount();
   }
@@ -902,7 +1045,6 @@ test.each([
       expect(
         await screen.findByRole("img", { name: "Chat attachment" })
       ).toHaveAttribute("src", "/api/chat/file/first-image");
-      expect(renderComplete()).toBe(false);
       const finalPackets: Packet[] = cancelled
         ? [
             ...initialPackets,
@@ -944,37 +1086,9 @@ test.each([
           );
         }
       }
-      await waitFor(() => expect(renderComplete()).toBe(true));
     } finally {
       view.unmount();
     }
-  }
-);
-
-test.each([
-  StopReason.TIMED_OUT,
-  StopReason.USER_CANCELLED,
-  StopReason.FINISHED,
-])(
-  "a stopped response without an answer releases the render gate (%s)",
-  async (stopReason) => {
-    seedSessionAwaitingAnswer();
-    render(
-      <AgentMessage
-        rawPackets={[
-          {
-            placement,
-            obj: { type: PacketType.STOP, stop_reason: stopReason },
-          },
-        ]}
-        chatState={chatState}
-        nodeId={NEW_ANSWER_NODE_ID}
-        llmManager={null}
-        hideFooter
-        disableTTS
-      />
-    );
-    await waitFor(() => expect(renderComplete()).toBe(true));
   }
 );
 
@@ -1020,7 +1134,6 @@ test("generated images remain visible when another tool follows answer text", as
       ]);
       expect(image).toBeVisible();
     });
-    expect(renderComplete()).toBe(false);
   } finally {
     view.unmount();
   }
@@ -1106,6 +1219,138 @@ test("a research step shows each of its nested calls once", async () => {
     expect(second).toHaveLength(1);
     expect(
       first[0]!.compareDocumentPosition(second[0]!) &
+        Node.DOCUMENT_POSITION_FOLLOWING
+    ).toBeTruthy();
+  } finally {
+    view.unmount();
+  }
+});
+
+test("a tool step after an accepted user message follows that message", async () => {
+  seedSessionAwaitingAnswer();
+  const search = (turn_index: number, query: string): Packet[] => [
+    {
+      placement: { turn_index, tab_index: 0 },
+      obj: { type: "search_tool_start", is_internet_search: false },
+    },
+    {
+      placement: { turn_index, tab_index: 0 },
+      obj: { type: "search_tool_queries_delta", queries: [query] },
+    },
+    { placement: { turn_index, tab_index: 0 }, obj: { type: "section_end" } },
+  ];
+  const packets: Packet[] = [
+    ...search(0, "first query"),
+    {
+      placement: { turn_index: 1, tab_index: 0 },
+      obj: {
+        type: PacketType.USER_MESSAGE,
+        id: "accepted",
+        message: "Use the latest report",
+        mentions: [],
+      },
+    },
+    ...search(2, "second query"),
+    ...answerPackets.map((packet) => ({
+      ...packet,
+      placement: { turn_index: 3, tab_index: 0 },
+    })),
+  ];
+  const view = render(
+    <AgentMessage
+      rawPackets={packets}
+      packetCount={packets.length}
+      chatState={chatState}
+      nodeId={NEW_ANSWER_NODE_ID}
+      llmManager={null}
+      hideFooter
+      disableTTS
+    />
+  );
+  try {
+    const bubble = await screen.findByText("Use the latest report");
+    // Each search gets its own timeline, on its side of the user message.
+    expect(screen.queryByText("2 steps")).not.toBeInTheDocument();
+    const timelines = screen.getAllByRole("button", {
+      name: "Toggle timeline",
+    });
+    expect(timelines).toHaveLength(2);
+    expect(
+      timelines[0]!.compareDocumentPosition(bubble) &
+        Node.DOCUMENT_POSITION_FOLLOWING
+    ).toBeTruthy();
+    expect(
+      bubble.compareDocumentPosition(timelines[1]!) &
+        Node.DOCUMENT_POSITION_FOLLOWING
+    ).toBeTruthy();
+  } finally {
+    view.unmount();
+  }
+});
+
+test("an auth error after an accepted user message shows its card without an answer", async () => {
+  seedSessionAwaitingAnswer();
+  const authError = (turn_index: number): Packet[] => [
+    {
+      placement: { turn_index, tab_index: 0 },
+      obj: {
+        type: PacketType.CUSTOM_TOOL_START,
+        tool_name: "custom__7__get_user",
+        display_name: "Get user",
+        tool_id: 7,
+      },
+    },
+    {
+      placement: { turn_index, tab_index: 0 },
+      obj: {
+        type: PacketType.CUSTOM_TOOL_DELTA,
+        tool_name: "custom__7__get_user",
+        tool_id: 7,
+        response_type: "text",
+        error: {
+          is_auth_error: true,
+          is_unreachable: false,
+          status_code: 401,
+          message: "unauthorized",
+        },
+      },
+    },
+  ];
+  const packets: Packet[] = [
+    ...answerPackets.slice(0, 2),
+    ...authError(1),
+    {
+      placement: { turn_index: 2, tab_index: 0 },
+      obj: {
+        type: PacketType.USER_MESSAGE,
+        id: "accepted",
+        message: "Try again",
+        mentions: [],
+      },
+    },
+    ...authError(3),
+    {
+      placement: { turn_index: 3, tab_index: 0 },
+      obj: { type: PacketType.STOP, stop_reason: StopReason.FINISHED },
+    },
+  ];
+  const view = render(
+    <AgentMessage
+      rawPackets={packets}
+      packetCount={packets.length}
+      chatState={chatState}
+      nodeId={NEW_ANSWER_NODE_ID}
+      llmManager={null}
+      hideFooter
+      disableTTS
+    />
+  );
+  try {
+    const bubble = await screen.findByText("Try again");
+    const cards = await screen.findAllByText("Connect Get user");
+    expect(cards).toHaveLength(2);
+    expect(
+      bubble.compareDocumentPosition(cards[1]!) &
         Node.DOCUMENT_POSITION_FOLLOWING
     ).toBeTruthy();
   } finally {

@@ -25,6 +25,7 @@ from onyx.chat.citation_utils import (
     collapse_citations,
     extract_citation_order_from_text,
     message_citation_sources,
+    remap_received_citations,
 )
 from onyx.chat.models import PromptMetadata
 from onyx.chat.prompt_utils import prepare_prompt, with_language_section
@@ -77,9 +78,12 @@ from onyx.prompts.deep_research.orchestration_layer import (
 )
 from onyx.prompts.deep_research.research_agent import MAX_RESEARCH_CYCLES
 from onyx.prompts.prompt_utils import get_current_llm_day_time
+from onyx.tools.constants import SKILL_TOOL_NAMES
 from onyx.tools.file_snapshot import SavedContextFiles
 from onyx.tools.interface import Tool, parse_tool_arguments
+from onyx.tools.models import ToolContext
 from onyx.tools.tool_implementations.search.search_tool import SearchTool
+from onyx.tools.tool_implementations.skills.skill_tools import skills_catalog_message
 from onyx.tracing.flows import LLMFlow
 from onyx.utils.logger import setup_logger
 
@@ -116,6 +120,9 @@ class DeepResearchAgent(Agent, RestorableFeature):
         context_files: ExtractedContextFiles | None = None,
     ) -> None:
         self.application_tools = allowed_tools
+        self.skills_catalog_message = skills_catalog_message(
+            allowed_tools, llm.config.max_input_tokens
+        )
         self.token_counter = token_counter
         self.user_identity = user_identity
         self.language_section = language_section
@@ -159,6 +166,11 @@ class DeepResearchAgent(Agent, RestorableFeature):
                 else THINK_TOOL_RESPONSE_MESSAGE,
             )
             for definition in get_orchestrator_tools(not self.is_reasoning_model)
+        ]
+        research_tools += [
+            tool.bind(ToolContext)
+            for tool in self.application_tools
+            if tool.name in SKILL_TOOL_NAMES
         ]
         super().__init__(
             llm,
@@ -289,6 +301,10 @@ class DeepResearchAgent(Agent, RestorableFeature):
             )
             reminder = USER_FINAL_REPORT_QUERY.format(research_plan=plan)
         with self._citation_lock:
+            received = remap_received_citations(
+                state.received_inputs, self.citation_mapping
+            )
+            self.citation_mapping.update(received.new_citations)
             sources = dict(self.citation_mapping)
         output_metadata = ResearchMessageMetadata(
             is_reasoning_model=self.is_reasoning_model,
@@ -297,6 +313,7 @@ class DeepResearchAgent(Agent, RestorableFeature):
             elapsed_seconds=time.monotonic() - self.started,
         )
         return PreparedStep(
+            input_messages=received.messages,
             tool_phase=phase.value,
             options=options,
             stall_timeout_s=DR_REPORT_LLM_TIMEOUT_S
@@ -306,6 +323,7 @@ class DeepResearchAgent(Agent, RestorableFeature):
             assemble_messages=partial(
                 prepare_prompt,
                 system_prompt=SystemMessage(content=system_prompt),
+                skills_catalog_message=self.skills_catalog_message,
                 custom_agent_prompt=None,
                 request_context_message=UserMessage(
                     content=ADDITIONAL_CONTEXT_PROMPT.format(

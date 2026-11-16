@@ -189,6 +189,7 @@ def test_chat_mcp_tools_require_usable_credentials(
                 openapi_schema=None,
                 mcp_input_schema={},
                 mcp_output_schema=None,
+                mcp_read_only=None,
                 custom_headers=None,
                 passthrough_auth=False,
                 mcp_server_id=server.id,
@@ -223,7 +224,9 @@ def test_chat_mcp_tools_require_usable_credentials(
     assert set(result) == ({1, 2} if available else set())
     assert [
         tool.tool_definition().name for tools in result.values() for tool in tools
-    ] == (["action_1", "action_2"] if available else [])
+    ] == (
+        ["mcp__1__Example__action_1", "mcp__1__Example__action_2"] if available else []
+    )
 
     get_server.assert_called_once()
     resolve.assert_called_once()

@@ -36,13 +36,15 @@ from onyx.llm.models import (
     UserMessage,
 )
 from onyx.tools.models import ToolContext
-from onyx.tools.tool_implementations.search.constants import MAX_SELECTED_SECTIONS
+from onyx.tools.tool_implementations.search.constants import (
+    MAX_QUERIES_PER_CALL,
+    MAX_SELECTED_SECTIONS,
+)
 from onyx.tools.tool_implementations.search.models import (
     SearchContext,
     SearchPlanningResult,
 )
 from onyx.tools.tool_implementations.search.search_tool import (
-    MAX_QUERIES_PER_CALL,
     SearchTool,
     update_search_context,
 )
@@ -175,7 +177,7 @@ def test_federated_retrieval_uses_selected_document_sets(
     federated = MagicMock(return_value=[])
 
     with patch(
-        f"{MODULE}.filter_document_set_names_by_user_access",
+        "onyx.db.document_set.filter_document_set_names_by_user_access",
         return_value=set(selected or []),
     ):
         _run(

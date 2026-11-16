@@ -122,6 +122,9 @@
       "authenticate": {
         "label": "Authenticate"
       },
+      "codingAgentIncognito": {
+        "tooltip": "Coding agent isn't available in incognito mode"
+      },
       "configure": {
         "tooltip": "Configure"
       },
@@ -817,6 +820,7 @@
       "search": {
         "placeholder": "Search actions..."
       },
+      "selectionSaveFailed": "Could not save the tool selection for this chat.",
       "serverFallback": {
         "label": "server"
       },
@@ -12449,6 +12453,7 @@
     },
     "input": {
       "appInputBar": {
+        "subagentsWorking": "Subagents working",
         "attachFilesButton": {
           "tooltip": "Attach Files"
         },
@@ -12457,6 +12462,7 @@
         },
         "deepResearchButton": {
           "disabledTooltip": "Deep Research is disabled in multi-model mode",
+          "incognitoTooltip": "Deep Research isn't available in incognito mode",
           "label": "Deep Research"
         },
         "incognitoNotice": {
@@ -12485,6 +12491,24 @@
         "voiceSetupButton": {
           "ariaLabel": "Set up voice",
           "tooltip": "Voice not configured. Set up in admin settings."
+        },
+        "pendingMessages": {
+          "keyboardHint": "Enter to send · Ctrl or Command + Enter to queue",
+          "multiModelHint": "Queueing is unavailable while comparing models. Choose one model to queue messages.",
+          "attachmentsHint": "Send attached files after this response finishes.",
+          "chooseResponseHint": "Choose a response before queueing a message.",
+          "incognitoHint": "Wait for the response to finish in incognito chat.",
+          "sendHint": "Send at the next step of this response",
+          "interruptHint": "Interrupt current work and send this message",
+          "sendLabel": "Send",
+          "queueLabel": "Queue",
+          "interruptKeyboardHint": "Enter to interrupt · Ctrl or Command + Enter to queue",
+          "interruptLabel": "Interrupt",
+          "waitHint": "Wait for the response to finish.",
+          "ctrlKey": "Ctrl"
+        },
+        "stopSubagentsButton": {
+          "label": "Stop subagents"
         }
       },
       "baseInputBar": {
@@ -12534,9 +12558,6 @@
         "content": {
           "ariaLabel": "Skill picker"
         },
-        "empty": {
-          "text": "No matching skills"
-        },
         "mcpServersGroup": {
           "label": "MCP servers"
         },
@@ -12575,6 +12596,19 @@
           "tooltip": "Replace this tile with its full text inline"
         }
       },
+      "richTile": {
+        "mentionTile": {
+          "removeButton": {
+            "ariaLabel": "Remove {name}"
+          }
+        },
+        "pasteTile": {
+          "ariaLabel": "Pasted text: {preview}, {meta}",
+          "removeButton": {
+            "ariaLabel": "Remove pasted text"
+          }
+        }
+      },
       "plusMenuButton": {
         "trigger": {
           "ariaLabel": "Open add menu",
@@ -12583,16 +12617,26 @@
       },
       "queuedMessageBar": {
         "discardButton": {
-          "tooltip": "Remove queued message"
+          "tooltip": "Remove queued message",
+          "ariaLabel": "Remove queued message: {message}"
         },
         "editHint": {
           "label": "edit ·"
         },
-        "item": {
-          "ariaLabel": "Toggle queued message"
-        },
         "removeHint": {
           "label": "remove"
+        },
+        "editButton": {
+          "tooltip": "Edit queued message",
+          "clearDraftTooltip": "Clear your draft to edit a queued message",
+          "ariaLabel": "Edit queued message: {message}"
+        },
+        "sendButton": {
+          "tooltip": "Interrupt current work and send this message",
+          "ariaLabel": "Send now: {message}"
+        },
+        "sendHint": {
+          "label": "send now ·"
         }
       },
       "sharedAppInputBar": {
@@ -12602,6 +12646,17 @@
         "startSessionButton": {
           "label": "Start New Session"
         }
+      },
+      "pendingMessages": {
+        "submitFailed": "Could not submit the message.",
+        "withdrawFailed": "Could not remove the pending message.",
+        "loadFailed": "Could not load pending messages.",
+        "alreadyAccepted": "This message was already accepted and is no longer pending.",
+        "interruptFailed": "Could not send this message now. It remains pending.",
+        "stopSubagentsFailed": "Could not stop the subagents."
+      },
+      "pendingToolApproval": {
+        "toast": "Approve or reject the pending tool calls first."
       }
     },
     "mcpApiKey": {
@@ -12697,6 +12752,9 @@
         "timedOut": {
           "text": "The response stopped because it reached its time limit."
         }
+      },
+      "agentResults": {
+        "received": "Subagent results received"
       },
       "codeBlock": {
         "copyButton": {
@@ -12845,11 +12903,6 @@
         },
         "stoppedStatus": {
           "text": "Image generation stopped"
-        }
-      },
-      "markdownTable": {
-        "copyButton": {
-          "label": "Copy table"
         }
       },
       "memoizedLink": {
@@ -13046,6 +13099,9 @@
           },
           "working": {
             "label": "Working"
+          },
+          "waitingForApproval": {
+            "label": "Waiting for your approval"
           }
         },
         "internalSearch": {
@@ -13182,6 +13238,9 @@
             "status": "Searching the web"
           }
         }
+      },
+      "toolApproval": {
+        "agentRequest": "{agent} wants to run {tool}"
       },
       "toolbar": {
         "dislikeButton": {
@@ -14400,6 +14459,54 @@
         "decision": "Decision",
         "vision": "Vision"
       }
+    },
+    "payloadView": {
+      "empty": {
+        "label": "No payload."
+      },
+      "showLess": {
+        "button": "Show less"
+      },
+      "showMore": {
+        "button": "Show more"
+      }
+    },
+    "approvalCard": {
+      "approveChat": {
+        "button": "Approve for this chat",
+        "tooltip": "Approve now and run this tool without asking again for the rest of this chat"
+      },
+      "approveOnce": {
+        "ariaLabel": "Approve this action once",
+        "button": "Approve once"
+      },
+      "approveSession": {
+        "button": "Approve for session",
+        "tooltip": "Approve matching actions for this session"
+      },
+      "deadline": "Approve by {time}",
+      "header": {
+        "required": "Approval requested: {headline}"
+      },
+      "headline": {
+        "multiAction": "{count, plural, one {# action} other {# actions}} in {app}",
+        "singleAction": "{action} in {app}"
+      },
+      "reject": {
+        "ariaLabel": "Reject this action",
+        "button": "Reject"
+      },
+      "record": {
+        "approved": "Approved: {headline}",
+        "closed": "No longer waiting: {headline}",
+        "disabled": "Disabled: {headline}",
+        "expired": "Timed out: {headline}",
+        "rejected": "Not approved: {headline}",
+        "approvedForChat": "Approved for this chat: {headline}",
+        "approvedForSession": "Approved for this session: {headline}"
+      },
+      "submitError": "Could not submit your decision. Try again.",
+      "actionWithDescription": "{action}: {description}"
     }
   },
   "craft": {
@@ -14412,50 +14519,6 @@
       },
       "switch": {
         "ariaLabel": "Switch agent"
-      }
-    },
-    "approvals": {
-      "approveOnce": {
-        "ariaLabel": "Approve this action once",
-        "button": "Approve once"
-      },
-      "approveSession": {
-        "button": "Approve for session",
-        "tooltip": "Approve matching actions for this session"
-      },
-      "details": {
-        "hideAriaLabel": "Hide details",
-        "showAriaLabel": "Show details"
-      },
-      "header": {
-        "required": "Approval required: {headline}"
-      },
-      "headline": {
-        "multiAction": "{count, plural, one {# action} other {# actions}} in {app}",
-        "singleAction": "{action} in {app}"
-      },
-      "payload": {
-        "empty": {
-          "label": "No payload."
-        },
-        "showLess": {
-          "button": "Show less"
-        },
-        "showMore": {
-          "button": "Show more"
-        }
-      },
-      "reject": {
-        "ariaLabel": "Reject this action",
-        "button": "Reject"
-      },
-      "status": {
-        "approved": "Approved",
-        "rejected": "Rejected",
-        "expired": "Expired"
-      },
-      "submit": {
-        "errorFallback": "Failed to submit decision"
       }
     },
     "apps": {
@@ -14593,7 +14656,7 @@
         "duplicateSkillName": "App “{appName}” already has an associated skill named “{skillName}”. Upload a skill with a different name."
       },
       "mcpPolicy": {
-        "description": "Configure what the Craft agent may do with this MCP server's tools.",
+        "description": "Choose which tools run automatically, ask for approval, or are disabled in chat and Craft.",
         "emptyPolicies": "No enabled tools on this server. Enable tools on the MCP actions page first.",
         "saveButton": "Save",
         "title": "Edit {name}"
@@ -15790,7 +15853,7 @@
     "actionPolicies": {
       "appTitle": "{name} Approval settings",
       "title": "Approval settings",
-      "personalDescription": "These settings control whether actions run automatically or require approval in Craft conversations and new tasks; existing tasks keep their own settings.",
+      "personalDescription": "These settings control whether actions run automatically or require approval in Craft conversations, new tasks, and MCP tool calls in chat; existing tasks keep their own settings.",
       "taskDescription": "Choose the plugins this task can use, then manage which actions run automatically. Changes apply only to this task.",
       "newTaskDescription": "Enable a plugin to use your current action settings as a starting point.",
       "workspace_disabled": "Disabled for the workspace",
@@ -15806,9 +15869,6 @@
       "saveError": "Could not save approval settings.",
       "emptyActions": "No known actions. Unknown actions require approval.",
       "emptyApps": "No apps available.",
-      "expired": "Approval timed out. The action did not run.",
-      "rejected": "Request rejected. This request did not run.",
-      "deadline": "Approve by {time}",
       "agentPermissionRequired": "This run stopped because an action needed approval. Review approval settings, then run the task again.",
       "enableForTask": "Enable for this task",
       "enableAppForTask": "Enable {app} for this task",
@@ -16443,6 +16503,12 @@
       "title": "Chats",
       "toasts": {
         "saveFailed": "Failed to save preferences"
+      },
+      "sendBehavior": {
+        "title": "Send Behavior While Working",
+        "description": "Choose what Enter and the send button do while an answer is in progress. Ctrl/Cmd+Enter always queues a follow-up.",
+        "afterStep": "After the current step",
+        "interrupt": "Interrupt current work"
       }
     },
     "connectors": {

@@ -122,6 +122,9 @@
       "authenticate": {
         "label": "인증"
       },
+      "codingAgentIncognito": {
+        "tooltip": "시크릿 모드에서는 코딩 에이전트를 사용할 수 없습니다"
+      },
       "configure": {
         "tooltip": "구성"
       },
@@ -817,6 +820,7 @@
       "search": {
         "placeholder": "작업 검색..."
       },
+      "selectionSaveFailed": "이 채팅의 도구 선택을 저장할 수 없습니다.",
       "serverFallback": {
         "label": "서버"
       },
@@ -12449,6 +12453,7 @@
     },
     "input": {
       "appInputBar": {
+        "subagentsWorking": "하위 에이전트 작업 중",
         "attachFilesButton": {
           "tooltip": "파일 첨부"
         },
@@ -12457,6 +12462,7 @@
         },
         "deepResearchButton": {
           "disabledTooltip": "다중 모델 모드에서는 Deep Research를 사용할 수 없습니다",
+          "incognitoTooltip": "시크릿 모드에서는 Deep Research를 사용할 수 없습니다",
           "label": "Deep Research"
         },
         "incognitoNotice": {
@@ -12485,6 +12491,24 @@
         "voiceSetupButton": {
           "ariaLabel": "음성 설정",
           "tooltip": "음성이 구성되지 않았습니다. 관리자 설정에서 구성하세요."
+        },
+        "pendingMessages": {
+          "keyboardHint": "Enter로 전송 · Ctrl 또는 Command + Enter로 대기열에 추가",
+          "multiModelHint": "모델을 비교하는 동안에는 대기열에 추가할 수 없습니다. 대기열을 사용하려면 모델을 하나 선택하세요.",
+          "attachmentsHint": "이 응답이 끝난 후 첨부 파일을 보내세요.",
+          "chooseResponseHint": "메시지를 대기열에 추가하기 전에 응답을 선택하세요.",
+          "incognitoHint": "시크릿 채팅에서는 응답이 끝날 때까지 기다리세요.",
+          "sendHint": "이 응답의 다음 단계에서 전송",
+          "interruptHint": "현재 작업을 중단하고 이 메시지 전송",
+          "sendLabel": "전송",
+          "queueLabel": "대기열",
+          "interruptKeyboardHint": "Enter로 중단 · Ctrl 또는 Command + Enter로 대기열에 추가",
+          "interruptLabel": "중단",
+          "waitHint": "응답이 끝날 때까지 기다리세요.",
+          "ctrlKey": "Ctrl"
+        },
+        "stopSubagentsButton": {
+          "label": "하위 에이전트 중지"
         }
       },
       "baseInputBar": {
@@ -12534,9 +12558,6 @@
         "content": {
           "ariaLabel": "스킬 선택기"
         },
-        "empty": {
-          "text": "일치하는 스킬 없음"
-        },
         "mcpServersGroup": {
           "label": "MCP 서버"
         },
@@ -12575,6 +12596,19 @@
           "tooltip": "이 타일을 전체 텍스트로 바꿔 입력창에 넣습니다"
         }
       },
+      "richTile": {
+        "mentionTile": {
+          "removeButton": {
+            "ariaLabel": "{name} 제거"
+          }
+        },
+        "pasteTile": {
+          "ariaLabel": "붙여넣은 텍스트: {preview}, {meta}",
+          "removeButton": {
+            "ariaLabel": "붙여넣은 텍스트 제거"
+          }
+        }
+      },
       "plusMenuButton": {
         "trigger": {
           "ariaLabel": "추가 메뉴 열기",
@@ -12583,16 +12617,26 @@
       },
       "queuedMessageBar": {
         "discardButton": {
-          "tooltip": "대기 중인 메시지 제거"
+          "tooltip": "대기 중인 메시지 제거",
+          "ariaLabel": "대기 중인 메시지 삭제: {message}"
         },
         "editHint": {
           "label": "편집 ·"
         },
-        "item": {
-          "ariaLabel": "대기 중인 메시지 전환"
-        },
         "removeHint": {
           "label": "제거"
+        },
+        "editButton": {
+          "tooltip": "대기열 메시지 편집",
+          "clearDraftTooltip": "대기열 메시지를 편집하려면 초안을 비우세요",
+          "ariaLabel": "대기 중인 메시지 편집: {message}"
+        },
+        "sendButton": {
+          "tooltip": "현재 작업을 중단하고 이 메시지 전송",
+          "ariaLabel": "지금 보내기: {message}"
+        },
+        "sendHint": {
+          "label": "지금 전송 ·"
         }
       },
       "sharedAppInputBar": {
@@ -12602,6 +12646,17 @@
         "startSessionButton": {
           "label": "새 세션 시작"
         }
+      },
+      "pendingMessages": {
+        "submitFailed": "메시지를 전송하지 못했습니다.",
+        "withdrawFailed": "대기 중인 메시지를 삭제하지 못했습니다.",
+        "loadFailed": "대기 중인 메시지를 불러오지 못했습니다.",
+        "alreadyAccepted": "이 메시지는 이미 수락되어 더 이상 대기 중이 아닙니다.",
+        "interruptFailed": "지금 메시지를 전송하지 못했습니다. 메시지는 대기 중입니다.",
+        "stopSubagentsFailed": "하위 에이전트를 중지할 수 없습니다."
+      },
+      "pendingToolApproval": {
+        "toast": "먼저 대기 중인 도구 호출을 승인하거나 거부하세요."
       }
     },
     "mcpApiKey": {
@@ -12697,6 +12752,9 @@
         "timedOut": {
           "text": "응답이 시간 제한에 도달하여 중지되었습니다."
         }
+      },
+      "agentResults": {
+        "received": "하위 에이전트 결과를 받았습니다"
       },
       "codeBlock": {
         "copyButton": {
@@ -12845,11 +12903,6 @@
         },
         "stoppedStatus": {
           "text": "이미지 생성 중지됨"
-        }
-      },
-      "markdownTable": {
-        "copyButton": {
-          "label": "표 복사"
         }
       },
       "memoizedLink": {
@@ -13046,6 +13099,9 @@
           },
           "working": {
             "label": "작업 중"
+          },
+          "waitingForApproval": {
+            "label": "승인을 기다리는 중"
           }
         },
         "internalSearch": {
@@ -13182,6 +13238,9 @@
             "status": "웹 검색 중"
           }
         }
+      },
+      "toolApproval": {
+        "agentRequest": "{agent}이(가) {tool}을(를) 실행하려고 합니다"
       },
       "toolbar": {
         "dislikeButton": {
@@ -14400,6 +14459,54 @@
         "decision": "판단",
         "vision": "비전"
       }
+    },
+    "payloadView": {
+      "empty": {
+        "label": "페이로드가 없습니다."
+      },
+      "showLess": {
+        "button": "간략히 보기"
+      },
+      "showMore": {
+        "button": "더 보기"
+      }
+    },
+    "approvalCard": {
+      "approveChat": {
+        "button": "이 채팅에서 승인",
+        "tooltip": "지금 승인하고 이 채팅의 나머지 동안 이 도구를 다시 묻지 않고 실행합니다"
+      },
+      "approveOnce": {
+        "ariaLabel": "이 작업을 한 번만 승인",
+        "button": "한 번 승인"
+      },
+      "approveSession": {
+        "button": "세션 동안 승인",
+        "tooltip": "이 세션의 일치하는 작업 승인"
+      },
+      "deadline": "{time}까지 승인",
+      "header": {
+        "required": "승인 요청됨: {headline}"
+      },
+      "headline": {
+        "multiAction": "{app}의 {count, plural, one {작업 #개} other {작업 #개}}",
+        "singleAction": "{app}의 {action}"
+      },
+      "reject": {
+        "ariaLabel": "이 작업 거부",
+        "button": "거부"
+      },
+      "record": {
+        "approved": "승인됨: {headline}",
+        "closed": "더 이상 대기하지 않음: {headline}",
+        "disabled": "비활성화됨: {headline}",
+        "expired": "시간 초과: {headline}",
+        "rejected": "승인되지 않음: {headline}",
+        "approvedForChat": "이 채팅에서 승인됨: {headline}",
+        "approvedForSession": "이 세션에서 승인됨: {headline}"
+      },
+      "submitError": "결정을 제출할 수 없습니다. 다시 시도하세요.",
+      "actionWithDescription": "{action}: {description}"
     }
   },
   "craft": {
@@ -14412,50 +14519,6 @@
       },
       "switch": {
         "ariaLabel": "에이전트 전환"
-      }
-    },
-    "approvals": {
-      "approveOnce": {
-        "ariaLabel": "이 작업을 한 번만 승인",
-        "button": "한 번 승인"
-      },
-      "approveSession": {
-        "button": "세션 동안 승인",
-        "tooltip": "이 세션의 일치하는 작업 승인"
-      },
-      "details": {
-        "hideAriaLabel": "세부 정보 숨기기",
-        "showAriaLabel": "세부 정보 표시"
-      },
-      "header": {
-        "required": "승인 필요: {headline}"
-      },
-      "headline": {
-        "multiAction": "{app}의 {count, plural, one {작업 #개} other {작업 #개}}",
-        "singleAction": "{app}의 {action}"
-      },
-      "payload": {
-        "empty": {
-          "label": "페이로드가 없습니다."
-        },
-        "showLess": {
-          "button": "간략히 보기"
-        },
-        "showMore": {
-          "button": "더 보기"
-        }
-      },
-      "reject": {
-        "ariaLabel": "이 작업 거부",
-        "button": "거부"
-      },
-      "status": {
-        "approved": "승인됨",
-        "rejected": "거부됨",
-        "expired": "만료됨"
-      },
-      "submit": {
-        "errorFallback": "결정을 제출하지 못했습니다"
       }
     },
     "apps": {
@@ -14593,7 +14656,7 @@
         "duplicateSkillName": "앱 \"{appName}\"에는 이미 \"{skillName}\" 이름의 연결된 스킬이 있습니다. 다른 이름의 스킬을 업로드하세요."
       },
       "mcpPolicy": {
-        "description": "이 MCP 서버의 도구로 Craft 에이전트가 할 수 있는 작업을 구성합니다.",
+        "description": "채팅과 Craft에서 자동으로 실행할 도구, 승인을 요청할 도구, 비활성화할 도구를 선택합니다.",
         "emptyPolicies": "이 서버에 활성화된 도구가 없습니다. 먼저 MCP 작업 페이지에서 도구를 활성화하세요.",
         "saveButton": "저장",
         "title": "{name} 편집"
@@ -15790,7 +15853,7 @@
     "actionPolicies": {
       "appTitle": "{name} 승인 설정",
       "title": "승인 설정",
-      "personalDescription": "이 설정은 Craft 대화와 새 작업에서 동작을 자동으로 실행할지 승인을 요청할지 결정하며, 기존 작업은 자체 설정을 유지합니다.",
+      "personalDescription": "이 설정은 Craft 대화, 새 작업, 채팅의 MCP 도구 호출에서 동작을 자동으로 실행할지 승인을 요청할지 결정하며, 기존 작업은 자체 설정을 유지합니다.",
       "taskDescription": "이 작업에서 사용할 플러그인과 자동으로 실행할 동작을 선택하세요. 변경 사항은 이 작업에만 적용됩니다.",
       "newTaskDescription": "플러그인을 활성화하면 현재 동작 설정으로 시작합니다.",
       "workspace_disabled": "워크스페이스에서 비활성화됨",
@@ -15806,9 +15869,6 @@
       "saveError": "승인 설정을 저장할 수 없습니다.",
       "emptyActions": "알려진 작업이 없습니다. 알 수 없는 작업은 승인이 필요합니다.",
       "emptyApps": "사용 가능한 앱이 없습니다.",
-      "expired": "승인 대기 시간이 초과되었습니다. 작업이 실행되지 않았습니다.",
-      "rejected": "요청이 거부되었습니다. 요청이 실행되지 않았습니다.",
-      "deadline": "{time}까지 승인",
       "agentPermissionRequired": "작업에 승인이 필요하여 실행이 중지되었습니다. 권한을 검토한 후 다시 실행하세요.",
       "enableForTask": "이 작업에서 활성화",
       "enableAppForTask": "이 작업에서 {app} 활성화",
@@ -16443,6 +16503,12 @@
       "title": "채팅",
       "toasts": {
         "saveFailed": "환경설정을 저장하지 못했습니다"
+      },
+      "sendBehavior": {
+        "title": "작업 중 전송 동작",
+        "description": "응답 중 Enter 키와 전송 버튼의 동작을 선택하세요. Ctrl/Cmd+Enter는 항상 후속 메시지를 대기열에 추가합니다.",
+        "afterStep": "현재 단계 후",
+        "interrupt": "현재 작업 중단"
       }
     },
     "connectors": {

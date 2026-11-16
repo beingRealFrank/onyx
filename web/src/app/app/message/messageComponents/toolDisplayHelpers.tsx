@@ -1,12 +1,14 @@
 import type { useTranslations } from "next-intl";
 import type { IconFunctionComponent } from "@opal/types";
 import {
+  CustomToolStart,
   Packet,
   PacketType,
   SearchToolPacket,
 } from "@/app/app/services/streamingModels";
 import { constructCurrentSearchState } from "@/app/app/message/messageComponents/timeline/renderers/search/searchStateUtils";
 import { isGroupEndPacket } from "@/app/app/message/messageComponents/timeline/packetHelpers";
+import { isDisplayPacket, isToolPacket } from "@/app/app/services/packetUtils";
 import {
   SvgListCheck,
   SvgGlobe,
@@ -60,12 +62,22 @@ export function parseToolKey(key: string): {
   };
 }
 
+/**
+ * The packet that names a step's activity. Debug and approval packets share
+ * the step's placement but never name it.
+ */
+export function firstActivityPacket(packets: Packet[]): Packet | undefined {
+  return packets.find(
+    (packet) => isToolPacket(packet, false) || isDisplayPacket(packet)
+  );
+}
+
 export type TimelineTranslate = ReturnType<
   typeof useTranslations<"chat.messages.timeline">
 >;
 
 export function getToolName(packets: Packet[], t: TimelineTranslate): string {
-  const firstPacket = packets[0];
+  const firstPacket = firstActivityPacket(packets);
   if (!firstPacket) return t("toolNames.tool");
 
   switch (firstPacket.obj.type) {
@@ -81,11 +93,12 @@ export function getToolName(packets: Packet[], t: TimelineTranslate): string {
       return t("toolNames.codeInterpreter");
     case PacketType.FETCH_TOOL_START:
       return t("toolNames.openUrls");
-    case PacketType.CUSTOM_TOOL_START:
+    case PacketType.CUSTOM_TOOL_START: {
       return (
-        (firstPacket.obj as { tool_name?: string }).tool_name ||
+        (firstPacket.obj as CustomToolStart).display_name ||
         t("toolNames.customTool")
       );
+    }
     case PacketType.IMAGE_GENERATION_TOOL_START:
       return t("toolNames.generateImage");
     case PacketType.DEEP_RESEARCH_PLAN_START:
@@ -105,7 +118,7 @@ export function getToolName(packets: Packet[], t: TimelineTranslate): string {
 }
 
 export function getToolIcon(packets: Packet[]): IconFunctionComponent {
-  const firstPacket = packets[0];
+  const firstPacket = firstActivityPacket(packets);
   if (!firstPacket) return SvgCircle;
 
   switch (firstPacket.obj.type) {

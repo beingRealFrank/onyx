@@ -6,7 +6,7 @@ from typing import Annotated, Literal
 from pydantic import BaseModel, ConfigDict, Field, SerializeAsAny
 
 from onyx.agents.models import ExecutionStatus, RunFailure, RunOutcome
-from onyx.agents.tools import PendingToolInput, ToolProgress
+from onyx.agents.tools import HumanToolAnswer, PendingToolInput, ToolProgress
 from onyx.llm.models import (
     AssistantMessage,
     GenerationContentEvent,
@@ -15,6 +15,7 @@ from onyx.llm.models import (
     ToolCall,
     ToolCallDeltaEvent,
     ToolResult,
+    UserMessage,
 )
 
 
@@ -23,6 +24,7 @@ class AgentEventType(str, Enum):
     AGENT_END = "agent_end"
     AGENT_SUSPENDED = "agent_suspended"
     INPUT_REQUIRED = "input_required"
+    INPUT_ENDED = "input_ended"
     MESSAGE_START = "message_start"
     MESSAGE_UPDATE = "message_update"
     MESSAGE_END = "message_end"
@@ -52,12 +54,6 @@ class AgentSuspendedEvent(_AgentEvent):
     type: Literal[AgentEventType.AGENT_SUSPENDED] = AgentEventType.AGENT_SUSPENDED
 
 
-class InputRequiredEvent(_AgentEvent):
-    type: Literal[AgentEventType.INPUT_REQUIRED] = AgentEventType.INPUT_REQUIRED
-    tool_call_id: str
-    request: PendingToolInput
-
-
 class AgentEndEvent(_AgentEvent):
     type: Literal[AgentEventType.AGENT_END] = AgentEventType.AGENT_END
     outcome: RunOutcome
@@ -72,6 +68,8 @@ class _MessageEvent(_AgentEvent):
 class MessageStartEvent(_MessageEvent):
     type: Literal[AgentEventType.MESSAGE_START] = AgentEventType.MESSAGE_START
     metadata: SerializeAsAny[BaseModel] | None = None
+    # Accepted inputs precede this assistant message in conversation order.
+    input_messages: list[UserMessage] = Field(default_factory=list)
 
 
 class MessageUpdateEvent(_MessageEvent):
@@ -88,6 +86,7 @@ class MessageEndEvent(_MessageEvent):
 class ToolStartEvent(_MessageEvent):
     type: Literal[AgentEventType.TOOL_START] = AgentEventType.TOOL_START
     tool_call: ToolCall
+    display_name: str | None = None
 
 
 class ToolUpdateEvent(_MessageEvent):
@@ -102,6 +101,26 @@ class ToolEndEvent(_MessageEvent):
     result: ToolResult
 
 
+class InputRequiredEvent(_MessageEvent):
+    type: Literal[AgentEventType.INPUT_REQUIRED] = AgentEventType.INPUT_REQUIRED
+    tool_call: ToolCall
+    request: PendingToolInput
+    # The call that `tool_call` makes for the model, such as a program's, when
+    # that call awaits the input.
+    nested_call: ToolCall | None = None
+
+
+class InputEndedEvent(_MessageEvent):
+    """A pending tool call stopped waiting: the run applied `answer`, or, when
+    it is None, the run or the scope of the waiting call stopped."""
+
+    type: Literal[AgentEventType.INPUT_ENDED] = AgentEventType.INPUT_ENDED
+    tool_call: ToolCall
+    request: PendingToolInput
+    answer: HumanToolAnswer | None
+    nested_call: ToolCall | None = None
+
+
 class ToolResultAmendedEvent(_MessageEvent):
     """A finish or suspend hook replaced the recorded result of an ended call."""
 
@@ -110,12 +129,14 @@ class ToolResultAmendedEvent(_MessageEvent):
     )
     tool_call: ToolCall
     result: ToolResult
+    display_name: str | None = None
 
 
 AgentEvent = Annotated[
     AgentStartEvent
     | AgentSuspendedEvent
     | InputRequiredEvent
+    | InputEndedEvent
     | AgentEndEvent
     | MessageStartEvent
     | MessageUpdateEvent

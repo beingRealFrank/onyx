@@ -6,7 +6,6 @@ import {
   CitationInfo,
   SearchToolDocumentsDelta,
   FetchToolDocuments,
-  Stop,
   GeneratedImage,
   MessageStart,
   ToolCallArgumentDelta,
@@ -40,9 +39,15 @@ export { parseToolKey };
 // Types
 // ============================================================================
 
+export interface PlacedImage extends GeneratedImage {
+  turnIndex: number;
+}
+
 export interface ProcessorState {
   nodeId: number;
   nextPacketIndex: number;
+  // Packets through the latest accepted user message
+  acceptedPacketCount: number;
 
   // Citations
   citations: StreamingCitation[];
@@ -74,7 +79,7 @@ export interface ProcessorState {
 
   // Images from every image generation call, nested calls included, in
   // arrival order and unique by file_id
-  generatedImages: GeneratedImage[];
+  generatedImages: PlacedImage[];
 
   // Streaming status
   finalAnswerComing: boolean;
@@ -112,6 +117,7 @@ export function createInitialState(nodeId: number): ProcessorState {
   return {
     nodeId,
     nextPacketIndex: 0,
+    acceptedPacketCount: 0,
     citations: [],
     seenCitationDocIds: new Set(),
     citationMap: {},
@@ -162,6 +168,7 @@ function injectSectionEnd(state: ProcessorState, groupKey: string): void {
  * Content packet types that indicate a group has meaningful content to display
  */
 const CONTENT_PACKET_TYPES_SET = new Set<PacketType>([
+  PacketType.USER_MESSAGE,
   PacketType.MESSAGE_START,
   PacketType.SEARCH_TOOL_START,
   PacketType.IMAGE_GENERATION_TOOL_START,
@@ -271,11 +278,11 @@ function handleImagePacket(state: ProcessorState, packet: Packet): void {
   }
   const delta = packet.obj;
   const seenFileIds = new Set(state.generatedImages.map((i) => i.file_id));
-  const newImages: GeneratedImage[] = [];
+  const newImages: PlacedImage[] = [];
   for (const image of delta.images) {
     if (seenFileIds.has(image.file_id)) continue;
     seenFileIds.add(image.file_id);
-    newImages.push(image);
+    newImages.push({ ...image, turnIndex: packet.placement.turn_index });
   }
   if (newImages.length > 0) {
     // A new array, so memoized consumers see the change
@@ -303,15 +310,29 @@ function handleStreamingStatusPacket(
 }
 
 function handleStopPacket(state: ProcessorState, packet: Packet): void {
-  if (packet.obj.type !== PacketType.STOP || state.stopPacketSeen) {
+  // An approval wait pauses the response: it continues after the decisions.
+  if (
+    packet.obj.type !== PacketType.STOP ||
+    packet.obj.stop_reason === StopReason.AWAITING_APPROVAL ||
+    state.stopPacketSeen
+  ) {
     return;
   }
 
   state.stopPacketSeen = true;
+  state.stopReason = packet.obj.stop_reason;
 
-  // Extract and store the stop reason
-  const stopPacket = packet.obj as Stop;
-  state.stopReason = stopPacket.stop_reason;
+  // Nothing follows Stop, so the latest text is the answer, even when its
+  // step also called a tool.
+  const latestDisplayKey = Array.from(state.displayGroupKeys).at(-1);
+  if (
+    latestDisplayKey !== undefined &&
+    !state.groupedPacketsMap
+      .get(latestDisplayKey)
+      ?.some((p) => p.obj.type === PacketType.USER_MESSAGE)
+  ) {
+    state.finalAnswerComing = true;
+  }
 
   // Inject SECTION_END for all group keys that don't have one
   state.seenGroupKeys.forEach((groupKey) => {
@@ -454,6 +475,8 @@ export function processPackets(
     const packet = rawPackets[i];
     if (packet) {
       processPacket(state, packet);
+      if (packet.obj.type === PacketType.USER_MESSAGE)
+        state.acceptedPacketCount = i + 1;
     }
   }
 

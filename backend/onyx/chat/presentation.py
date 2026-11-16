@@ -1,12 +1,15 @@
 """Attach chat metadata to agent output and build saved response summaries."""
 
 from collections.abc import Mapping, Sequence
+from types import MappingProxyType
 
 from pydantic import BaseModel
 
 from onyx.agents.events import (
     AgentEndEvent,
     AgentEvent,
+    InputEndedEvent,
+    InputRequiredEvent,
     MessageEndEvent,
     MessageStartEvent,
     MessageUpdateEvent,
@@ -18,6 +21,8 @@ from onyx.agents.events import (
 from onyx.agents.models import (
     AgentInfo,
     ExecutionStatus,
+    InputMessageMetadata,
+    InputSource,
     RunFailure,
     RunFailureKind,
     RunState,
@@ -26,23 +31,29 @@ from onyx.agents.models import (
 from onyx.chat.citation_processor import CitationMapping, DynamicCitationProcessor
 from onyx.chat.emitter import Emitter
 from onyx.chat.models import (
+    AgentToolApproval,
     ChatMessageMetadata,
     ChatResponseSnapshot,
     CitationMode,
     MessageRendering,
     PresentationMode,
     ResponseRecord,
+    ResponseReplayData,
+    SavedToolApproval,
     ToolHistorySnapshot,
     ToolReplayData,
+    recorded_mentions,
 )
 from onyx.chat.renderer import (
     HIDDEN_TOOLS,
     MessageRenderer,
     ResponseLayout,
     ToolRenderer,
+    approval_outcome,
     tool_renderer,
 )
 from onyx.chat.response import response_record, tool_arguments_for_display
+from onyx.chat.tool_approvals import ended_answer
 from onyx.chat.tool_results import (
     restored_result_details,
     tool_result_parts,
@@ -52,9 +63,18 @@ from onyx.coding_agent.tool_definitions import CODING_AGENT_TOOL_NAME
 from onyx.context.search.models import SearchDoc, SearchDocsResponse
 from onyx.deep_research.models import ResearchMessageMetadata, ResearchPhase
 from onyx.deep_research.tool_definitions import THINK_TOOL_NAME
-from onyx.llm.models import AssistantMessage, ToolCall, ToolResultMessage
+from onyx.llm.models import AssistantMessage, ToolCall, ToolResultMessage, UserMessage
 from onyx.server.query_and_chat.placement import Placement
-from onyx.server.query_and_chat.streaming_models import OverallStop, Packet
+from onyx.server.query_and_chat.streaming_models import (
+    AWAITING_APPROVAL,
+    OverallStop,
+    Packet,
+    ReplayEnd,
+    ToolApprovalRequest,
+    ToolApprovalResolved,
+    UserMessagePacket,
+)
+from onyx.tools.constants import SEND_MESSAGE_TOOL_NAME, SPAWN_AGENT_TOOL_NAME
 from onyx.tools.models import (
     CustomToolCallSummary,
     CustomToolUserFileSnapshot,
@@ -65,6 +85,13 @@ from onyx.tools.tool_implementations.images.models import FinalImageGenerationRe
 from onyx.utils.logger import setup_logger
 
 logger = setup_logger()
+
+_NO_APPROVALS: Mapping[tuple[str, str], Sequence[SavedToolApproval]] = MappingProxyType(
+    {}
+)
+_NO_AGENT_APPROVALS: Mapping[tuple[str, str], Sequence[AgentToolApproval]] = (
+    MappingProxyType({})
+)
 
 
 def _message_identity(message: AssistantMessage) -> str:
@@ -77,6 +104,8 @@ def _collect_tool_history(
     snapshot: RunState,
     tool_ids: Mapping[str, int | None],
     initial_citations: CitationMapping | None = None,
+    *,
+    include_parent: bool = False,
 ) -> ToolHistorySnapshot:
     """Project completed and interrupted operations from one execution tree.
 
@@ -108,6 +137,7 @@ def _collect_tool_history(
                     snapshot,
                     step_index,
                     index,
+                    include_parent=include_parent,
                 )
             )
             sources = tool_result_sources(result.details) if result else None
@@ -117,7 +147,7 @@ def _collect_tool_history(
                 documents.setdefault(document.document_id, document)
             citations.update_citation_mapping(sources.citations)
     for child in snapshot.child_runs:
-        child_history = _collect_tool_history(child, tool_ids)
+        child_history = _collect_tool_history(child, tool_ids, include_parent=True)
         records.extend(child_history.tool_calls)
         documents.update(child_history.all_search_docs)
     return ToolHistorySnapshot(
@@ -135,6 +165,8 @@ def _tool_record(
     snapshot: RunState,
     turn: int,
     index: int,
+    *,
+    include_parent: bool,
 ) -> ToolCallInfo:
     data = tool_response.details if tool_response else None
     sources = tool_result_sources(data)
@@ -167,8 +199,8 @@ def _tool_record(
 
     return ToolCallInfo(
         message_id=_message_identity(output),
-        parent_message_id=snapshot.parent_message_id,
-        parent_tool_call_id=snapshot.parent_tool_call_id,
+        parent_message_id=snapshot.parent_message_id if include_parent else None,
+        parent_tool_call_id=snapshot.parent_tool_call_id if include_parent else None,
         turn_index=turn,
         tab_index=index,
         tool_name=tool_call.name,
@@ -361,6 +393,33 @@ def _project_response_display(
     return response.model_copy(update={"presentation": presentation})
 
 
+def user_message_packets(
+    messages: Sequence[UserMessage],
+    layout: ResponseLayout,
+    parent: Placement | None,
+) -> list[Packet]:
+    packets: list[Packet] = []
+    for message in messages:
+        if (
+            not isinstance(message.metadata, InputMessageMetadata)
+            or message.metadata.source != InputSource.HUMAN
+        ):
+            continue
+        if message.id is None:
+            raise ValueError("Accepted user message has no identity")
+        packets.append(
+            Packet(
+                placement=layout.next_section(parent),
+                obj=UserMessagePacket(
+                    id=message.id,
+                    message=message.text,
+                    mentions=recorded_mentions(message),
+                ),
+            )
+        )
+    return packets
+
+
 class ResponsePresenter:
     """Translate SDK events into chat packets, with child output inside tool tabs."""
 
@@ -376,6 +435,28 @@ class ResponsePresenter:
         self.renderers: dict[str, MessageRenderer] = {}
         self.tools: dict[tuple[str, str, str], ToolRenderer] = {}
 
+    def replay(
+        self,
+        response: ResponseRecord,
+        replay: ResponseReplayData,
+        settings: dict[str, MessageRendering],
+    ) -> None:
+        """Send the saved output of a suspended response that this stream
+        continues, then `ReplayEnd`; its calls that wait stay open for their
+        live events."""
+        for packet in replay_response(
+            response,
+            replay.tools,
+            settings,
+            replay.documents,
+            self.layout,
+            approvals=replay.approvals,
+            agent_approvals=replay.agent_approvals,
+            open_calls=self.tools,
+        ):
+            self.emitter.emit(packet)
+        self.emitter.emit(Packet(placement=Placement(turn_index=0), obj=ReplayEnd()))
+
     def consume(self, event: AgentEvent) -> None:
         output: list[Packet] = []
         parent = self.tools.get(
@@ -386,6 +467,9 @@ class ResponsePresenter:
             )
         )
         if isinstance(event, MessageStartEvent):
+            output = user_message_packets(
+                event.input_messages, self.layout, parent.placement if parent else None
+            )
             if event.parent_run_id is None:
                 self.emitter.llm_step_started()
             if parent is not None:
@@ -413,18 +497,24 @@ class ResponsePresenter:
             for call in calls:
                 tool_placement = renderer.tool_placement(call.id)
                 self.tools[(event.run_id, event.message_id, call.id)] = tool_renderer(
-                    call, tool_placement, self.tool_ids.get(call.name)
+                    call,
+                    tool_placement,
+                    self.tool_ids.get(call.name),
                 )
-        elif isinstance(event, (ToolStartEvent, ToolUpdateEvent, ToolEndEvent)):
+        elif isinstance(
+            event,
+            (
+                ToolStartEvent,
+                ToolUpdateEvent,
+                ToolEndEvent,
+                InputRequiredEvent,
+                InputEndedEvent,
+            ),
+        ):
             tool = self.tools.get((event.run_id, event.message_id, event.tool_call.id))
             if tool is None:
                 return
-            if isinstance(event, ToolStartEvent):
-                output = tool.start()
-            elif isinstance(event, ToolUpdateEvent):
-                output = tool.update(event.progress.details, event.progress.content)
-            else:
-                output = tool.complete(event.result)
+            output = tool.consume(event)
         elif isinstance(event, ToolResultAmendedEvent):
             if event.tool_call.name in HIDDEN_TOOLS:
                 return
@@ -441,6 +531,7 @@ class ResponsePresenter:
                     if renderer is not None
                     else self.layout.next_section(parent.placement if parent else None),
                     self.tool_ids.get(event.tool_call.name),
+                    event.display_name,
                 )
             output = tool.amend(event.result)
         elif isinstance(event, AgentEndEvent):
@@ -462,7 +553,10 @@ class ResponsePresenter:
 
 
 def overall_stop(status: RunStatus, failure: RunFailure | None) -> OverallStop:
-    """How a top-level response ended: the one mapping for live, replay and Stop."""
+    """How a top-level response ended: the one mapping for live, replay and Stop.
+    A suspended response waits for the user's approval decisions."""
+    if status == RunStatus.SUSPENDED:
+        return OverallStop(stop_reason=AWAITING_APPROVAL)
     if status != RunStatus.CANCELLED:
         return OverallStop(stop_reason="finished")
     if failure is not None and failure.kind == RunFailureKind.DEADLINE:
@@ -478,15 +572,30 @@ def replay_response(
     layout: ResponseLayout | None = None,
     parent: Placement | None = None,
     default_mode: PresentationMode = PresentationMode.ANSWER,
+    *,
+    approvals: Mapping[tuple[str, str], Sequence[SavedToolApproval]] = _NO_APPROVALS,
+    agent_approvals: Mapping[
+        tuple[str, str], Sequence[AgentToolApproval]
+    ] = _NO_AGENT_APPROVALS,
+    open_calls: dict[tuple[str, str, str], ToolRenderer] | None = None,
 ) -> list[Packet]:
     """Render saved accepted steps using detached tool records and source documents.
 
-    The session response carries the saved message error separately. Stop packets
-    close rendering; they do not classify execution success or failure.
+    `approvals` holds the response's approval requests by run ID and tool call
+    ID; each shows in its call's card, with its decision once it has one.
+    `agent_approvals` holds the requests of the background agents that a call
+    started, which show in that call's card the same way. The
+    calls of a suspended response that have no result stay open, as its stream
+    left them. With `open_calls`, the replay starts a stream that continues the
+    response: it collects those calls' renderers, by run, message and call ID,
+    for their live events, and sends no stop. The session response carries the saved message error separately.
+    Stop packets close rendering; they do not classify execution success or
+    failure.
     """
     layout = layout or ResponseLayout()
     packets: list[Packet] = []
     for step in response.steps:
+        packets.extend(user_message_packets(step.input_messages, layout, parent))
         message = step.message
         message_id = _message_identity(message)
         setting = settings.get(message_id, MessageRendering(mode=default_mode))
@@ -526,12 +635,51 @@ def replay_response(
                 )
                 result = result.model_copy(update={"details": restored})
             renderer_of_call = tool_renderer(
-                call, tool_placement, record.tool_id if record is not None else None
+                call,
+                tool_placement,
+                record.tool_id if record is not None else None,
+                execution.display_name if execution is not None else None,
             )
             packets.extend(renderer_of_call.start())
+            waits = result is None and response.status == RunStatus.SUSPENDED
+            shown = [
+                (approval, None)
+                for approval in approvals.get((response.run_id, call.id), ())
+            ] + [
+                (agent.approval, agent.agent_name)
+                for agent in agent_approvals.get((response.run_id, call.id), ())
+            ]
+            for approval, agent_name in shown:
+                approval_id = str(approval.id)
+                packets.append(
+                    Packet(
+                        placement=tool_placement,
+                        obj=ToolApprovalRequest(
+                            approval_id=approval_id,
+                            tool_call_id=call.id,
+                            tool_name=approval.tool_name,
+                            display_name=approval.display_name,
+                            arguments=approval.arguments,
+                            agent_name=agent_name,
+                        ),
+                    )
+                )
+                if approval.decision is None:
+                    continue
+                packets.append(
+                    Packet(
+                        placement=tool_placement,
+                        obj=ToolApprovalResolved(
+                            approval_id=approval_id,
+                            outcome=approval_outcome(ended_answer(approval)),
+                        ),
+                    )
+                )
             for child in response.child_runs:
+                # Agent tools start background runs, whose output arrives separately.
                 if (
-                    child.parent_message_id != message_id
+                    call.name in (SPAWN_AGENT_TOOL_NAME, SEND_MESSAGE_TOOL_NAME)
+                    or child.parent_message_id != message_id
                     or child.parent_tool_call_id != call.id
                 ):
                     continue
@@ -550,10 +698,17 @@ def replay_response(
                         layout,
                         tool_placement,
                         child_mode,
+                        approvals=approvals,
                     )
                 )
+            if waits:
+                if open_calls is not None:
+                    open_calls[(response.run_id, message_id, call.id)] = (
+                        renderer_of_call
+                    )
+                continue
             packets.extend(renderer_of_call.complete(result))
-    if response.parent_run_id is None:
+    if response.parent_run_id is None and open_calls is None:
         packets.append(
             Packet(
                 placement=Placement(turn_index=0),

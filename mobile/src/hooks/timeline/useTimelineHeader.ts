@@ -10,6 +10,7 @@ import {
   StopReason,
 } from "@/chat/streamingModels";
 import { isDisplayPacket, isToolPacket } from "@/chat/timeline/packetUtils";
+import { customToolLabel } from "@/chat/timeline/toolDisplay";
 import { TurnGroup } from "@/chat/timeline/transformers";
 
 export interface TimelineHeaderResult {
@@ -22,10 +23,19 @@ export function useTimelineHeader(
   turnGroups: TurnGroup[],
   stopReason?: StopReason,
   codeModeWorking = false,
+  awaitingApproval = false,
 ): TimelineHeaderResult {
   return useMemo(() => {
     const hasPackets = turnGroups.length > 0;
     const userStopped = stopReason === StopReason.USER_CANCELLED;
+
+    if (awaitingApproval) {
+      return {
+        headerText: "Waiting for your approval",
+        hasPackets,
+        userStopped,
+      };
+    }
 
     if (codeModeWorking) {
       return { headerText: "Working", hasPackets, userStopped };
@@ -76,7 +86,7 @@ export function useTimelineHeader(
     }
 
     if (packetType === PacketType.CUSTOM_TOOL_START) {
-      const toolName = (firstPacket.obj as CustomToolStart).tool_name;
+      const toolName = customToolLabel(firstPacket.obj as CustomToolStart);
       return {
         headerText: toolName ? `Executing ${toolName}` : "Executing tool",
         hasPackets,
@@ -104,5 +114,5 @@ export function useTimelineHeader(
     }
 
     return { headerText: "Thinking...", hasPackets, userStopped };
-  }, [turnGroups, stopReason, codeModeWorking]);
+  }, [turnGroups, stopReason, codeModeWorking, awaitingApproval]);
 }

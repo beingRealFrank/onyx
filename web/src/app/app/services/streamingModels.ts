@@ -1,4 +1,5 @@
 import { OnyxDocument } from "@/lib/search/types";
+import type { RecordedMention } from "@/lib/chat/types";
 
 // Base interface for all streaming objects
 interface BaseObj {
@@ -6,6 +7,7 @@ interface BaseObj {
 }
 
 export enum PacketType {
+  USER_MESSAGE = "user_message",
   MESSAGE_START = "message_start",
   MESSAGE_DELTA = "message_delta",
   MESSAGE_END = "message_end",
@@ -76,6 +78,10 @@ export enum PacketType {
   // stream their own tool packets at the same placement with sub_turn_index.
   CODE_MODE_START = "code_mode_start",
   CODE_MODE_DELTA = "code_mode_delta",
+
+  // Tool call approvals: the run waits for the user's decision on a request
+  TOOL_APPROVAL_REQUEST = "tool_approval_request",
+  TOOL_APPROVAL_RESOLVED = "tool_approval_resolved",
 }
 
 export const CODE_INTERPRETER_TOOL_TYPES = {
@@ -92,6 +98,13 @@ export const isCodeInterpreterToolType = (toolType: string): boolean =>
 export const CODE_MODE_TOOL_TYPE = "execute_code";
 
 // Basic Message Packets
+export interface UserMessage extends BaseObj {
+  type: "user_message";
+  id: string;
+  message: string;
+  mentions: RecordedMention[];
+}
+
 export interface MessageStart extends BaseObj {
   id: string;
   type: "message_start";
@@ -116,6 +129,9 @@ export enum StopReason {
   USER_CANCELLED = "user_cancelled",
   /** The turn reached its execution deadline. */
   TIMED_OUT = "timed_out",
+  /** The stream ended while tool calls wait for the user's approval. The
+   * response continues in a new stream after the decisions. */
+  AWAITING_APPROVAL = "awaiting_approval",
 }
 
 export interface Stop extends BaseObj {
@@ -218,7 +234,10 @@ export interface CustomToolErrorInfo {
 
 export interface CustomToolStart extends BaseObj {
   type: "custom_tool_start";
+  // The name the model calls; custom and MCP tools use a qualified name.
   tool_name: string;
+  // The name users see.
+  display_name: string;
   tool_id?: number | null;
 }
 
@@ -412,6 +431,11 @@ export interface ChatHeartbeat extends BaseObj {
 
 export type ChatHeartbeatObj = ChatHeartbeat;
 
+// Ends the replayed prefix of a continuation stream; carries no run state
+export interface ReplayEnd extends BaseObj {
+  type: "replay_end";
+}
+
 export type SectionEndObj = SectionEnd;
 
 export type PacketErrorObj = PacketError;
@@ -516,20 +540,52 @@ export interface ToolCallDebug extends BaseObj {
   tool_args: Record<string, unknown>;
 }
 
+// Tool Approval Packets
+export interface ToolApprovalRequest extends BaseObj {
+  type: "tool_approval_request";
+  approval_id: string;
+  tool_call_id: string;
+  tool_name: string;
+  display_name: string;
+  arguments: Record<string, unknown>;
+  /** The background subagent that made the request; null for the reply's own
+   * calls. Such a request waits on its own: no stop of the reply closes it. */
+  agent_name: string | null;
+}
+
+export interface ToolApprovalResolved extends BaseObj {
+  type: "tool_approval_resolved";
+  approval_id: string;
+  // "approved_for_chat": approved by a grant for the chat's later calls of the
+  // tool. "disabled": an approval found the tool disabled, so the call did not
+  // run. "cancelled": the call stopped waiting because its run or cell stopped.
+  outcome:
+    | "approved"
+    | "approved_for_chat"
+    | "rejected"
+    | "disabled"
+    | "cancelled";
+}
+
+export type ToolApprovalObj = ToolApprovalRequest | ToolApprovalResolved;
+
 // Union type for all possible streaming objects
 export type ObjTypes =
+  | UserMessage
   | ToolCallDebug
   | ChatObj
   | NewToolObj
   | ReasoningObj
   | StopObj
   | ChatHeartbeatObj
+  | ReplayEnd
   | SectionEndObj
   | CitationObj
   | DeepResearchPlanObj
   | ResearchAgentObj
   | CodingAgentObj
   | CodeModeObj
+  | ToolApprovalObj
   | PacketErrorObj
   | CitationObj;
 

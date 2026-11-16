@@ -78,7 +78,7 @@ from onyx.db.connector import (
     check_federated_connectors_exist,
     fetch_unique_document_sources,
 )
-from onyx.db.document_set import filter_document_set_names_by_user_access
+from onyx.db.document_set import require_document_set_access
 from onyx.db.engine.sql_engine import get_session_with_current_tenant
 from onyx.db.federated import (
     get_federated_connector_document_set_mappings_by_document_set_names,
@@ -88,7 +88,6 @@ from onyx.db.models import SearchSettings, User
 from onyx.db.search_settings import get_current_search_settings
 from onyx.db.slack_bot import fetch_slack_bots
 from onyx.document_index.interfaces import DocumentIndex
-from onyx.error_handling.error_codes import OnyxErrorCode
 from onyx.error_handling.exceptions import OnyxError
 from onyx.feature_flags.factory import get_default_feature_flag_provider
 from onyx.feature_flags.interface import NoOpFeatureFlagProvider
@@ -123,13 +122,13 @@ from onyx.tools.interface import (
     CITATIONS_PER_TOOL_CALL,
     Tool,
     parse_tool_arguments,
+    tool_definition_from_arguments,
     tool_message_history,
 )
 from onyx.tools.models import (
     ChatMinimalTextMessage,
     CodeModeExposure,
     CodeModeResultSpec,
-    ToolCallException,
     ToolContext,
 )
 from onyx.tools.tool_implementations.search.constants import (
@@ -140,6 +139,7 @@ from onyx.tools.tool_implementations.search.constants import (
     LLM_NON_CUSTOM_QUERY_WEIGHT,
     LLM_SEMANTIC_QUERY_WEIGHT,
     MAX_CHUNKS_FOR_RELEVANCE,
+    MAX_QUERIES_PER_CALL,
     MAX_SELECTED_SECTIONS,
     ORIGINAL_QUERY_WEIGHT,
     RERANK_POOL_SIZE,
@@ -182,8 +182,6 @@ logger = setup_logger()
 # PostHog flag for decision-model rerank and expansion (cloud rollout control).
 SEARCH_DECISION_RERANK_EXPANSION_FLAG = "onyx-search-decision-rerank-expansion"
 
-QUERIES_FIELD = "queries"
-MAX_QUERIES_PER_CALL = 3
 _CODE_MODE_RESULT = SEARCH_RESULTS_CODE_MODE_RESULT.model_copy(
     update={"usage": CODE_MODE_SEARCH_USAGE}
 )
@@ -346,7 +344,7 @@ def _trim_sections_by_tokens(
 
 
 class SearchTool(Tool):
-    merge_list_argument = QUERIES_FIELD
+    merge_list_argument = "queries"
     merge_list_limit = MAX_QUERIES_PER_CALL
 
     NAME = INTERNAL_SEARCH_TOOL_NAME
@@ -762,29 +760,8 @@ class SearchTool(Tool):
     """For explicit tool calling"""
 
     def tool_definition(self) -> ToolDefinition:
-        return ToolDefinition(
-            name=self.name,
-            description=self.description,
-            strict=True,
-            parameters={
-                "type": "object",
-                "additionalProperties": False,
-                "properties": {
-                    QUERIES_FIELD: {
-                        "type": "array",
-                        "items": {"type": "string"},
-                        "description": (
-                            f"List of up to {MAX_QUERIES_PER_CALL} search queries to "
-                            "execute, typically a single query. Later queries are "
-                            "ignored. "
-                            "Query expansion and filter extraction steps will be run "
-                            "automatically downstream, do not include time or source type "
-                            "scoping details in your query."
-                        ),
-                    },
-                },
-                "required": [QUERIES_FIELD],
-            },
+        return tool_definition_from_arguments(
+            self.name, self.description, SearchArguments, strict=True
         )
 
     @log_function_time(
@@ -882,15 +859,6 @@ class SearchTool(Tool):
         )
         if original_query is None:
             raise ValueError("Search requires a user message")
-        if QUERIES_FIELD not in invocation.arguments:
-            raise ToolCallException(
-                message=f"Missing required '{QUERIES_FIELD}' parameter in internal_search tool call",
-                llm_facing_message=(
-                    f"The internal_search tool requires a '{QUERIES_FIELD}' parameter "
-                    f"containing an array of search queries. Please provide the queries "
-                    f'like: {{"queries": ["your search query here"]}}'
-                ),
-            )
         llm_queries = parse_tool_arguments(
             SearchArguments, invocation.arguments
         ).queries
@@ -1021,26 +989,13 @@ class SearchTool(Tool):
             )
 
             # Validate document-set access for user-supplied filters.
-            if (
-                self.user_selected_filters
-                and self.user_selected_filters.document_set
-                and self.user
-                and not self.user.is_anonymous
-            ):
-                requested = self.user_selected_filters.document_set
-                accessible = filter_document_set_names_by_user_access(
-                    db_session=db_session,
-                    document_set_names=requested,
-                    user=self.user,
-                )
-                unauthorized = sorted(
-                    name for name in requested if name not in accessible
-                )
-                if unauthorized:
-                    raise OnyxError(
-                        OnyxErrorCode.INSUFFICIENT_PERMISSIONS,
-                        f"User does not have access to document sets: {unauthorized}",
-                    )
+            require_document_set_access(
+                db_session,
+                self.user_selected_filters.document_set
+                if self.user_selected_filters
+                else None,
+                self.user,
+            )
 
             # SearchSettings → materialise EmbeddingModel while session is
             # open (forces lazy-load of cloud_provider properties)

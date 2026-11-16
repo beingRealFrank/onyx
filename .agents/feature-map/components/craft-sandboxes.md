@@ -93,6 +93,13 @@ Rootfs delivery (Firecracker only): `.github/workflows/craft-fc-rootfs.yml` conv
 `craft-runtime` tag with no egress CA and publishes
 `onyxdotapp/craft-fc-artifacts:rootfs-<version>`. The host agent DaemonSet copies
 it into `<dataDir>/rootfs` with an init container (`craft.hostAgent.rootfs`).
+The chart takes `<version>` from `craft.hostAgent.rootfs.version` (default: the
+`global.version` release tag) and sets `SANDBOX_FC_TEMPLATE` to it, so the drive
+and the template tag move together (`onyx.craftFcRootfsVersion`). An explicit
+`craft.hostAgent.rootfs.image.tag` needs an explicit `configMap.SANDBOX_FC_TEMPLATE`
+(the chart fails without it); the operator keeps those two aligned. Without
+`existingSecret` values, the chart makes the agent mTLS CA and certificates and
+keeps them on upgrade with `lookup` (`deployment/helm/charts/onyx/templates/craft-fc-host-agent.yaml`).
 The agent reads the sandbox-proxy CA ConfigMap at each Create and sends it with
 `SetKey`; the guest daemon installs it at `Init`. So one drive and one template
 key serve every deployment CA.
@@ -174,15 +181,29 @@ then replaces `outputs/` and `attachments/`
 in place with `tar`. Managed-content pushes, not snapshots, use
 `backend/onyx/server/features/build/sandbox/image/sandbox_daemon/extract.py:safe_extract_then_atomic_swap`.
 
-**Sweep.** `cleanup_idle_sandboxes_task` runs on the `sandbox` Celery queue.
-It first reconciles runtime resources
-(`backend/onyx/server/features/build/session/resource_cleanup.py:reconcile_sandbox_resources`): it fails stale
-`PROVISIONING` attempts and deletes runtime resources
-(`backend/onyx/server/features/build/sandbox/models.py:SandboxResourceKind`) whose owner row is absent, failed,
-sleeping or terminated, after a grace period. It then snapshots active
-sandboxes and puts idle ones to sleep. Sleep also clears every Next.js port of
-the user, so a restored session can get a different port
+**Sweep.** Two tasks on the `sandbox` Celery queue share one per-tenant sweep
+(`backend/onyx/background/celery/tasks/build/tasks.py:_sweep_tenant_sandboxes`). The sweep fails stale
+`PROVISIONING` attempts
+(`backend/onyx/server/features/build/session/resource_cleanup.py:fail_stale_provisioning_sandboxes`), snapshots
+active sandboxes and puts idle ones to sleep. Sleep also clears every Next.js
+port of the user, so a restored session can get a different port
 ([[craft-webapp-proxy]]).
+
+- `cleanup_idle_sandboxes_task` runs the sweep for each tenant from the
+  per-tenant fanout. It reaches rows whose runtime may be gone and lists no
+  runtime resources.
+- `reconcile_sandbox_runtimes_task` is cluster-wide. It runs every 15 minutes,
+  and is scheduled and runs only when `ENABLE_CRAFT=true`. It lists the tenants that
+  own a live runtime resource
+  (`backend/onyx/server/features/build/sandbox/base.py:SandboxManager.list_resource_tenant_ids`) and runs the
+  sweep for each, including tenants the fanout skips, such as product-gated
+  ones. For these tenants the sweep also deletes runtime resources
+  (`backend/onyx/server/features/build/sandbox/models.py:SandboxResourceKind`) whose owner row is absent, failed,
+  sleeping or terminated, after a grace period
+  (`backend/onyx/server/features/build/session/resource_cleanup.py:reconcile_sandbox_resources`). In
+  multi-tenant deployments it deletes the resources of tenants that no longer
+  exist, after the same grace period; single-tenant deployments retain
+  resources labelled with another tenant.
 
 **Managed content.** Provisioning and a live push build the skills and user
 library payload with the same code
@@ -313,6 +334,24 @@ Harness sandboxes (the agent harness runs outside the sandbox):
   VM if it lost the lock. A session with no directory keeps its last save.
   A configuration error in the eviction
   policy turns idle eviction off; it never fails the node report.
+  On a draining node (NodeInfo drain state, read by each report) every VM
+  counts as idle, so it is saved and stopped once not busy. Each call
+  records "wanted" for the sandbox; a stop's save gives way to a call
+  within the placement lock wait (capture and upload are cancelled). The
+  end of a turn saves that session in the background
+  (`SANDBOX_FC_TURN_END_SAVE_INTERVAL_SECONDS`, default 300, 0 = off). One
+  save per session runs at a time (non-blocking session lock; a stop that
+  finds it held keeps the VM).
+- Purge (`.../firecracker/purge.py`, delete hooks, all after the DB
+  commit): a Craft session delete
+  (`backend/onyx/server/features/build/session/api.py:delete_session`)
+  deletes that session's save, its directory on the running VM and its
+  exec records; its artifacts stay. A user delete (`delete_user_from_db`
+  in a background thread, `UserManager.delete`) and the last-admin tenant
+  delete stop the VM and delete every save, artifact and record of the
+  sandbox. A purge mark makes a save in progress drop its
+  archive instead of committing. Saves and artifacts are indexed per
+  sandbox in the tenant cache.
 
 ---
 
@@ -354,8 +393,10 @@ Harness sandboxes (the agent harness runs outside the sandbox):
 6. `sleep-fail-closed` **Sleep is fail-closed.** If any snapshot or session
    workspace listing fails,
    `server/features/build/session/sandbox_lifecycle.py:sleep_sandbox` aborts and the sandbox stays
-   `RUNNING` for the next sweep. An unhealthy endpoint does not prove files are
-   lost. The session creation lock is held around the final check and
+   `RUNNING` for the next sweep. It raises, and the sweep and the reconciler
+   finish their other work and then fail, so a sandbox that cannot be slept or
+   a resource that cannot be removed is reported, not only logged. An unhealthy
+   endpoint does not prove files are lost. The session creation lock is held around the final check and
    termination, so a new session cannot start in a pod that is being removed.
 7. `exec-completion-sentinel` **Use the completion sentinel for exec
    scripts.** The Kubernetes exec client returns buffered output without

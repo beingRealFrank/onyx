@@ -191,14 +191,10 @@ def test_handoff_release_failure_settles_waiters_after_saving() -> None:
         assert released == [run.id]
         assert len(saved) == 1 and saved[0].run_state.status == RunStatus.SUSPENDED
         assert finished.is_set() and run.is_done
-        assert coordinator.active_run(agent.id) is None
+        assert coordinator.newest_run(agent.id) is None
         with pytest.raises(RuntimeError) as result_error:
             run.result(0)
         assert result_error.value is failure
-        assert run._reusable.done()
-        with pytest.raises(RuntimeError) as reuse_error:
-            run.wait_until_reusable(CancellationSignal())
-        assert reuse_error.value is failure
     finally:
         assert coordinator.close(3)
 
@@ -904,7 +900,9 @@ def test_run_can_capture_and_release_without_its_creating_agent() -> None:
 @pytest.mark.parametrize(
     "change", ["order", "extra", "inactive_phase", "schema_order", "same"]
 )
-def test_handoff_preserves_complete_tool_configuration(change: str) -> None:
+def test_handoff_resumes_when_other_tool_configuration_changes(change: str) -> None:
+    """A waiting call resumes while its tool keeps its parameters, whatever
+    else of the tool configuration changed, such as key order in its schema."""
     effects: list[str] = []
 
     def execute(_invocation: ToolInvocation) -> ToolResult:
@@ -959,11 +957,6 @@ def test_handoff_preserves_complete_tool_configuration(change: str) -> None:
     saved = run.handoff().model_dump(mode="json")
     checkpoint = ExecutionCheckpoint.model_validate(saved)
     rebuilt = make_agent(checkpoint.agent_state, restored=True)
-    if change in {"order", "extra", "inactive_phase", "schema_order"}:
-        with pytest.raises(ValueError, match="Restored tool configuration"):
-            rebuilt.resume(checkpoint.run_state)
-        assert effects == []
-        return
     resumed = rebuilt.resume(checkpoint.run_state)
     try:
         assert resumed.wait_until_settled(3).status == RunStatus.SUSPENDED

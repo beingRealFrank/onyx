@@ -41,7 +41,10 @@ from onyx.tools.tool_implementations.code_mode.cells import (
     CodeCells,
     durable_details,
 )
-from onyx.tools.tool_implementations.code_mode.code_mode_tool import CodeModeTool
+from onyx.tools.tool_implementations.code_mode.code_mode_tool import (
+    CodeModeTool,
+    WaitCodeTool,
+)
 from onyx.tools.tool_implementations.code_mode.models import (
     UNFINISHED_CALL_MESSAGE,
     CodeModeCallFinished,
@@ -447,6 +450,55 @@ def test_description_lists_stubs() -> None:
     assert "[n]" in first.description
 
 
+def test_parameters_come_from_arguments() -> None:
+    max_output_tokens: JsonValue = {
+        "type": "integer",
+        "default": 10000,
+        "description": "Token budget for the output this call returns; longer "
+        "output is cut in the middle. Defaults to 10000 tokens, at most 40000.",
+    }
+    assert _make_tool().tool_definition().parameters == {
+        "type": "object",
+        "properties": {
+            "code": {"type": "string", "description": "The Python program to run."},
+            "yield_time_ms": {
+                "type": "integer",
+                "default": 30000,
+                "description": "How long to wait for the program before returning "
+                "its output so far while it keeps running. Defaults to 30000 ms, at "
+                "most 120000 ms.",
+            },
+            "max_output_tokens": max_output_tokens,
+        },
+        "required": ["code"],
+    }
+    assert WaitCodeTool(
+        CodeCells(), _make_tool().program
+    ).tool_definition().parameters == {
+        "type": "object",
+        "properties": {
+            "cell_id": {
+                "type": "integer",
+                "description": "Identifier of the running cell.",
+            },
+            "yield_time_ms": {
+                "type": "integer",
+                "default": 15000,
+                "description": "How long to wait for more output before returning. "
+                "Defaults to 15000 ms, at most 300000 ms.",
+            },
+            "max_output_tokens": max_output_tokens,
+            "terminate": {
+                "type": "boolean",
+                "default": False,
+                "description": "True stops the running cell; false or omitted waits "
+                "for output.",
+            },
+        },
+        "required": ["cell_id"],
+    }
+
+
 def test_mcp_like_stub_runs_and_type_checks_its_arguments() -> None:
     def list_issues(_invocation: ToolInvocation, _context: ToolContext) -> ToolOutcome:
         return ToolResult(content='{"issues": [{"number": 1}]}')
@@ -527,13 +579,13 @@ def test_without_deferred_functions_there_is_no_tool_search() -> None:
 def test_a_deferred_function_found_with_tool_search_is_type_checked() -> None:
     tool = _make_tool(FakeMCPTool("list-tickets", _list_tickets, _TICKET_PARAMETERS))
     _, found, _ = _run(tool, "print((await tool_search('tickets'))[0]['name'])\n")
-    assert found.stdout == "acme__list_tickets\n", found
-    _, wrong, _ = _run(tool, "await acme__list_tickets(servise='a')\n")
+    assert found.stdout == "mcp__1__acme__list_tickets\n", found
+    _, wrong, _ = _run(tool, "await mcp__1__acme__list_tickets(servise='a')\n")
     assert wrong.status == "failed"
     assert "Type check failed" in (wrong.error or ""), wrong.error
     assert wrong.calls == []
     _, right, _ = _run(
-        tool, "print((await acme__list_tickets(service='a'))['tickets'][0])\n"
+        tool, "print((await mcp__1__acme__list_tickets(service='a'))['tickets'][0])\n"
     )
     assert right.stdout == "{'id': 1, 'service': 'a'}\n", right
 
@@ -543,7 +595,7 @@ def test_non_citing_calls_do_not_reserve_citation_numbers() -> None:
     _, details, _ = _run(
         tool,
         "import asyncio\n"
-        "t, s = await asyncio.gather(acme__list_tickets(service='a'), "
+        "t, s = await asyncio.gather(mcp__1__acme__list_tickets(service='a'), "
         "web_search(queries=['x']))\n",
         ToolContext(next_citation_num=1),
     )

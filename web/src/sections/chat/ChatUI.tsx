@@ -8,8 +8,10 @@ import React, {
   useRef,
 } from "react";
 import { Message } from "@/app/app/types";
+import type { ComposedMessage } from "@/lib/chat/types";
 import { OnyxDocument, MinimalOnyxDocument } from "@/lib/search/types";
 import HumanMessage from "@/app/app/message/HumanMessage";
+import AgentResultsDivider from "@/app/app/message/AgentResultsDivider";
 import { ErrorBanner } from "@/app/app/message/Resubmit";
 import { MinimalAgent } from "@/lib/agents/types";
 import { LlmDescriptor, LlmManager } from "@/lib/hooks";
@@ -31,6 +33,7 @@ import {
 import WindowedRow from "@/sections/chat/WindowedRow";
 import OlderMessagesLoader from "@/sections/chat/OlderMessagesLoader";
 import { useOptionalScrollContainer } from "@/sections/chat/ScrollContainerContext";
+import ToolApprovalsRegion from "@/sections/chat/ToolApprovalsRegion";
 import { cn } from "@opal/utils";
 
 /** Width constraint for normal (non-multi-model) messages. */
@@ -63,18 +66,19 @@ export interface ChatUIProps {
   stopGenerating: () => void;
 
   // Submit handlers
-  onSubmit: (args: {
-    message: string;
-    messageIdToResend?: number;
-    currentMessageFiles: any[];
-    deepResearch: boolean;
-    modelOverride?: LlmDescriptor;
-    regenerationRequest?: {
-      messageId: number;
-      parentMessage: Message;
-    };
-    selectedModels?: SelectedModel[];
-  }) => Promise<void>;
+  onSubmit: (
+    args: ComposedMessage & {
+      messageIdToResend?: number;
+      currentMessageFiles: any[];
+      deepResearch: boolean;
+      modelOverride?: LlmDescriptor;
+      regenerationRequest?: {
+        messageId: number;
+        parentMessage: Message;
+      };
+      selectedModels?: SelectedModel[];
+    }
+  ) => Promise<void>;
   deepResearchEnabled: boolean;
   currentMessageFiles: any[];
 
@@ -193,6 +197,7 @@ const ChatUI = React.memo(
         return async function (modelOverride: LlmDescriptor) {
           return await onSubmitRef.current({
             message: regenerationRequest.parentMessage.message,
+            mentions: regenerationRequest.parentMessage.mentions ?? [],
             currentMessageFiles: currentMessageFilesRef.current,
             deepResearch: deepResearchEnabledRef.current,
             modelOverride,
@@ -205,10 +210,10 @@ const ChatUI = React.memo(
     );
 
     const handleEditWithMessageId = useCallback(
-      (editedContent: string, msgId: number) => {
+      (edited: ComposedMessage, msgId: number) => {
         const models = selectedModelsRef.current;
         onSubmitRef.current({
-          message: editedContent,
+          ...edited,
           messageIdToResend: msgId,
           currentMessageFiles: [],
           deepResearch: deepResearchEnabledRef.current,
@@ -240,8 +245,7 @@ const ChatUI = React.memo(
             Multi-model responses use full width while normal messages stay centered. */}
         <div
           className={cn(
-            // Size container for answer tables that grow past the prose column.
-            "@container flex flex-col w-full h-full pt-4 pb-8 gap-12",
+            "flex flex-col w-full h-full pt-4 pb-8 gap-12",
             !fullWidthChat && "md:pe-1"
           )}
         >
@@ -281,6 +285,7 @@ const ChatUI = React.memo(
                       stopGenerating={stopGenerating}
                       content={message.message}
                       files={message.files}
+                      mentions={message.mentions}
                       messageId={message.messageId}
                       nodeId={message.nodeId}
                       onEdit={handleEditWithMessageId}
@@ -314,6 +319,19 @@ const ChatUI = React.memo(
                   )}
                 </WindowedRow>
               );
+            } else if (message.type === "agent_results") {
+              return (
+                <WindowedRow
+                  id={messageReactComponentKey}
+                  key={messageReactComponentKey}
+                  className={cn("w-full self-center", msgWidth)}
+                  pinned={pinned}
+                  initiallyMounted={initiallyMounted}
+                  heightCache={rowHeightCache}
+                >
+                  <AgentResultsDivider />
+                </WindowedRow>
+              );
             } else if (
               message.type === "assistant" ||
               message.type === "error"
@@ -341,10 +359,7 @@ const ChatUI = React.memo(
                 <WindowedRow
                   id={messageReactComponentKey}
                   key={messageReactComponentKey}
-                  className={cn(
-                    "chat-table-breakout w-full self-center",
-                    msgWidth
-                  )}
+                  className={cn("w-full self-center", msgWidth)}
                   pinned={pinned}
                   initiallyMounted={initiallyMounted}
                   heightCache={rowHeightCache}
@@ -376,7 +391,9 @@ const ChatUI = React.memo(
                   {message.type === "error" && (
                     <ErrorBanner
                       resubmit={
-                        chatState === "input" && i === messages.length - 1
+                        chatState === "input" &&
+                        previousMessage?.type === "user" &&
+                        i === messages.length - 1
                           ? onResubmit
                           : undefined
                       }
@@ -393,11 +410,27 @@ const ChatUI = React.memo(
             return null;
           })}
 
-          {(error || loadError) && (
+          {/* Approval cards that wait for a decision follow the last message. */}
+          <ToolApprovalsRegion
+            modelProviderLookup={modelProviderLookup}
+            className={cn(
+              "w-full self-center",
+              msgWidth,
+              !fullWidthChat && "px-3"
+            )}
+          />
+
+          {error && (
+            <div className={cn("p-4 w-full self-center", msgWidth)}>
+              {/* A session error has no saved question to resend. */}
+              <ErrorBanner {...error} />
+            </div>
+          )}
+          {!error && loadError && (
             <div className={cn("p-4 w-full self-center", msgWidth)}>
               <ErrorBanner
                 resubmit={chatState === "input" ? onResubmit : undefined}
-                error={error || loadError || ""}
+                error={loadError}
               />
             </div>
           )}

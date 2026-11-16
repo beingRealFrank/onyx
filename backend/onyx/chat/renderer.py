@@ -5,8 +5,21 @@ from collections.abc import Mapping
 from pydantic import BaseModel, JsonValue, TypeAdapter, ValidationError
 from typing_extensions import override
 
+from onyx.agents.events import (
+    InputEndedEvent,
+    InputRequiredEvent,
+    ToolEndEvent,
+    ToolStartEvent,
+    ToolUpdateEvent,
+)
+from onyx.agents.tools import HumanToolAnswer, InputDecision
 from onyx.chat.citation_processor import DynamicCitationProcessor
-from onyx.chat.models import CitationMode, MessageRendering, PresentationMode
+from onyx.chat.models import (
+    CitationMode,
+    MessageRendering,
+    PresentationMode,
+    ToolApprovalDenial,
+)
 from onyx.chat.response import thinking_tool_text, tool_arguments_for_display
 from onyx.coding_agent.models import CodingAgentCallResult
 from onyx.coding_agent.tool_definitions import (
@@ -462,15 +475,34 @@ class MessageRenderer:
         return result
 
 
+def approval_outcome(answer: HumanToolAnswer | None) -> packets.ToolApprovalOutcome:
+    """How an approval request ended, from the answer it gave its call; a
+    request without an answer stopped waiting."""
+    if answer is None:
+        return "cancelled"
+    if answer.standing:
+        return "approved_for_chat"
+    if answer.decision == InputDecision.APPROVE:
+        return "approved"
+    denial = answer.result.metadata if answer.result else None
+    return denial.outcome if isinstance(denial, ToolApprovalDenial) else "rejected"
+
+
 class ToolRenderer:
     """Project tool progress and final results without sending private tool state."""
 
     def __init__(
-        self, call: ToolCall, placement: Placement, tool_id: int | None = None
+        self,
+        call: ToolCall,
+        placement: Placement,
+        tool_id: int | None = None,
+        display_name: str | None = None,
     ) -> None:
         self.call = call
         self.placement = placement
         self.tool_id = tool_id
+        # The tool's own display name; calls of tools without one show their name.
+        self.display_name = display_name
         self._queries: set[str] = set()
         self._documents: set[str] = set()
         self._last_details: BaseModel | None = None
@@ -479,6 +511,43 @@ class ToolRenderer:
         self._files: set[str] = set()
         self._started = False
         self._finished = False
+
+    def consume(
+        self,
+        event: ToolStartEvent
+        | ToolUpdateEvent
+        | ToolEndEvent
+        | InputRequiredEvent
+        | InputEndedEvent,
+    ) -> list[packets.Packet]:
+        if isinstance(event, ToolStartEvent):
+            self.display_name = event.display_name
+            return self.start()
+        if isinstance(event, ToolUpdateEvent):
+            return self.update(event.progress.details, event.progress.content)
+        if isinstance(event, ToolEndEvent):
+            return self.complete(event.result)
+        # Only the requests of the chat's tool approvals have cards
+        # (onyx/chat/tool_approvals.py).
+        if not event.request.approval:
+            return []
+        obj: packets.ToolApprovalRequest | packets.ToolApprovalResolved
+        if isinstance(event, InputRequiredEvent):
+            # A program's call waits inside this call's card.
+            call = event.nested_call or self.call
+            obj = packets.ToolApprovalRequest(
+                approval_id=event.request.request_id,
+                tool_call_id=call.id,
+                tool_name=call.name,
+                display_name=event.request.display_name or call.name,
+                arguments=tool_arguments_for_display(call),
+            )
+        else:
+            obj = packets.ToolApprovalResolved(
+                approval_id=event.request.request_id,
+                outcome=approval_outcome(event.answer),
+            )
+        return [packets.Packet(placement=self.placement, obj=obj)]
 
     def start(self) -> list[packets.Packet]:
         if self._started:
@@ -496,7 +565,11 @@ class ToolRenderer:
             )
         if not objects:
             objects = [
-                packets.CustomToolStart(tool_name=name, tool_id=self.tool_id),
+                packets.CustomToolStart(
+                    tool_name=name,
+                    display_name=self.display_name or name,
+                    tool_id=self.tool_id,
+                ),
                 packets.CustomToolArgs(
                     tool_name=name,
                     tool_args={
@@ -827,9 +900,13 @@ class CodeModeRenderer(ToolRenderer):
     """
 
     def __init__(
-        self, call: ToolCall, placement: Placement, tool_id: int | None = None
+        self,
+        call: ToolCall,
+        placement: Placement,
+        tool_id: int | None = None,
+        display_name: str | None = None,
     ) -> None:
-        super().__init__(call, placement, tool_id)
+        super().__init__(call, placement, tool_id, display_name)
         self._children: dict[int, ToolRenderer] = {}
         self._stdout = ""
 
@@ -880,6 +957,7 @@ class CodeModeRenderer(ToolRenderer):
                 ),
                 self.placement.model_copy(update={"sub_turn_index": call.index}),
                 call.tool_id,
+                call.display_name,
             )
             self._children[call.index] = child
         return child
@@ -992,8 +1070,11 @@ class CodeModeRenderer(ToolRenderer):
 
 
 def tool_renderer(
-    call: ToolCall, placement: Placement, tool_id: int | None = None
+    call: ToolCall,
+    placement: Placement,
+    tool_id: int | None = None,
+    display_name: str | None = None,
 ) -> ToolRenderer:
     """The renderer of a tool call: a code mode card, or the generic tool display."""
     renderer = CodeModeRenderer if call.name in CODE_MODE_TOOL_NAMES else ToolRenderer
-    return renderer(call, placement, tool_id)
+    return renderer(call, placement, tool_id, display_name)
